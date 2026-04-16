@@ -9,7 +9,7 @@
     {
       "type": "model_weights",
       "path": "artifacts/model.pth",
-      "checksum": "replace-me"
+      "checksum": "5140f5796987534bffcc329c104917ab09b2599936b9517fd4a571db75625719"
     }
   ],
   "input_schema": {
@@ -23,7 +23,12 @@
     "size_score": "float",
     "ripeness_score": "float",
     "confidence": "float",
-    "predicted_class": "str"
+    "predicted_class": "str",
+    "overall_grade": "str",
+    "class_probabilities": "object",
+    "explanation_payload": "object",
+    "transparency_refs": "array",
+    "model_version_used": "str"
   },
   "metrics": {
     "weighted_f1": 0.0,

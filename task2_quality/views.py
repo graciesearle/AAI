@@ -20,15 +20,14 @@ class QualityPredictView(APIView):
         model_name = cfg.default_model_name
         model_version = serializer.validated_data.get("model_version", cfg.default_model_version)
 
-        manifest = None
         try:
             manifest = load_manifest(cfg.model_root, model_name, model_version)
-        except ManifestError:
-            # Keep endpoint usable during early setup; enforce strictly later.
-            manifest = None
+        except ManifestError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
             payload = run_quality_inference(
+                image_file=serializer.validated_data["image"],
                 model_name=model_name,
                 model_version=model_version,
                 manifest=manifest,
