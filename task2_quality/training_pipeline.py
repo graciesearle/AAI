@@ -17,7 +17,9 @@ Features:
 
 from __future__ import annotations
 
+import argparse
 import copy
+import os
 import random
 from urllib.error import URLError
 from dataclasses import dataclass
@@ -40,6 +42,43 @@ DEFAULT_MODEL_ROOT = REPO_ROOT / "models"
 DEFAULT_MODEL_NAME = "produce-quality"
 DEFAULT_MODEL_VERSION = "auto"
 DEFAULT_PLOT_OUTPUT_DIR = REPO_ROOT / "docs" / "task2"
+
+
+def _env_str(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    return value.strip() if value is not None and value.strip() else default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _parse_semver(version: str) -> Tuple[int, int, int] | None:
@@ -133,6 +172,82 @@ class RunConfig:
     model_version: str = DEFAULT_MODEL_VERSION
     plot_output_dir: Path = DEFAULT_PLOT_OUTPUT_DIR
     predict_image: Path | None = None
+
+
+def _config_from_env(base: RunConfig) -> RunConfig:
+    return RunConfig(
+        dataset_dir=Path(_env_str("TASK2_DATASET_DIR", str(base.dataset_dir))),
+        epochs=_env_int("TASK2_EPOCHS", base.epochs),
+        batch_size=_env_int("TASK2_BATCH_SIZE", base.batch_size),
+        learning_rate=_env_float("TASK2_LEARNING_RATE", base.learning_rate),
+        image_size=_env_int("TASK2_IMAGE_SIZE", base.image_size),
+        patience=_env_int("TASK2_PATIENCE", base.patience),
+        num_workers=_env_int("TASK2_NUM_WORKERS", base.num_workers),
+        seed=_env_int("TASK2_SEED", base.seed),
+        no_pretrained=_env_bool("TASK2_NO_PRETRAINED", base.no_pretrained),
+        model_root=Path(_env_str("TASK2_MODEL_ROOT", str(base.model_root))),
+        model_name=_env_str("TASK2_MODEL_NAME", base.model_name),
+        model_version=_env_str("TASK2_MODEL_VERSION", base.model_version),
+        plot_output_dir=Path(_env_str("TASK2_PLOT_OUTPUT_DIR", str(base.plot_output_dir))),
+        predict_image=(
+            Path(_env_str("TASK2_PREDICT_IMAGE", str(base.predict_image)))
+            if base.predict_image is not None or os.environ.get("TASK2_PREDICT_IMAGE")
+            else None
+        ),
+    )
+
+
+def _apply_cli_overrides(base: RunConfig) -> RunConfig:
+    parser = argparse.ArgumentParser(description="Train Task 2 produce-quality model")
+    parser.add_argument("--dataset-dir", type=Path, default=base.dataset_dir)
+    parser.add_argument("--epochs", type=int, default=base.epochs)
+    parser.add_argument("--batch-size", type=int, default=base.batch_size)
+    parser.add_argument("--learning-rate", type=float, default=base.learning_rate)
+    parser.add_argument("--image-size", type=int, default=base.image_size)
+    parser.add_argument("--patience", type=int, default=base.patience)
+    parser.add_argument("--num-workers", type=int, default=base.num_workers)
+    parser.add_argument("--seed", type=int, default=base.seed)
+    parser.add_argument("--model-root", type=Path, default=base.model_root)
+    parser.add_argument("--model-name", type=str, default=base.model_name)
+    parser.add_argument("--model-version", type=str, default=base.model_version)
+    parser.add_argument("--plot-output-dir", type=Path, default=base.plot_output_dir)
+    parser.add_argument("--predict-image", type=Path, default=base.predict_image)
+
+    pretrained_group = parser.add_mutually_exclusive_group()
+    pretrained_group.add_argument(
+        "--no-pretrained",
+        action="store_true",
+        help="Disable pretrained ImageNet initialization",
+    )
+    pretrained_group.add_argument(
+        "--pretrained",
+        action="store_true",
+        help="Force pretrained ImageNet initialization",
+    )
+
+    args = parser.parse_args()
+    no_pretrained = base.no_pretrained
+    if args.no_pretrained:
+        no_pretrained = True
+    if args.pretrained:
+        no_pretrained = False
+
+    return RunConfig(
+        dataset_dir=args.dataset_dir,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        image_size=args.image_size,
+        patience=args.patience,
+        num_workers=args.num_workers,
+        seed=args.seed,
+        no_pretrained=no_pretrained,
+        model_root=args.model_root,
+        model_name=args.model_name,
+        model_version=args.model_version,
+        plot_output_dir=args.plot_output_dir,
+        predict_image=args.predict_image,
+    )
 
 
 # Edit this block directly when running in Colab.
@@ -577,7 +692,7 @@ def predict_single_image(
 
 def main() -> None:
     """Run end-to-end training, evaluation, plotting, and optional inference."""
-    cfg = CONFIG
+    cfg = _apply_cli_overrides(_config_from_env(CONFIG))
     set_seed(cfg.seed)
     resolved_version, save_model_path, save_plot_path = resolve_output_paths(cfg)
 

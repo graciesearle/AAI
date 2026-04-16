@@ -147,6 +147,8 @@ Model training and lifecycle upload instructions are documented here:
 
 - `docs/task2/training_and_upload.md`
 
+This guide includes dynamic versioning plus CLI and environment-variable overrides.
+
 ### A) Direct AI service test (quick contract check)
 
 From DESD root:

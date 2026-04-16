@@ -26,6 +26,63 @@ Edit `CONFIG` in `task2_quality/training_pipeline.py`:
 - `model_version`: use `auto` or set explicitly (e.g., `1.1.0`).
 - `no_pretrained`: set `False` to use ImageNet initialization.
 
+You can also override config without editing the file using CLI args or env vars.
+
+## CLI Overrides
+
+Supported flags:
+
+- `--dataset-dir`
+- `--epochs`
+- `--batch-size`
+- `--learning-rate`
+- `--image-size`
+- `--patience`
+- `--num-workers`
+- `--seed`
+- `--model-root`
+- `--model-name`
+- `--model-version`
+- `--plot-output-dir`
+- `--predict-image`
+- `--pretrained` or `--no-pretrained`
+
+Example:
+
+```powershell
+c:/Users/jacob/Documents/Projects/UNI/.venv/Scripts/python.exe task2_quality/training_pipeline.py --dataset-dir "FruitAndVegetableDataset" --model-name "produce-quality" --model-version auto --epochs 25 --batch-size 32 --learning-rate 0.0005 --plot-output-dir "docs/task2" --pretrained
+```
+
+## Environment Variable Overrides
+
+Environment variables are applied before CLI parsing. CLI flags take precedence.
+
+- `TASK2_DATASET_DIR`
+- `TASK2_EPOCHS`
+- `TASK2_BATCH_SIZE`
+- `TASK2_LEARNING_RATE`
+- `TASK2_IMAGE_SIZE`
+- `TASK2_PATIENCE`
+- `TASK2_NUM_WORKERS`
+- `TASK2_SEED`
+- `TASK2_NO_PRETRAINED`
+- `TASK2_MODEL_ROOT`
+- `TASK2_MODEL_NAME`
+- `TASK2_MODEL_VERSION`
+- `TASK2_PLOT_OUTPUT_DIR`
+- `TASK2_PREDICT_IMAGE`
+
+Example:
+
+```powershell
+$env:TASK2_DATASET_DIR = "FruitAndVegetableDataset"
+$env:TASK2_MODEL_NAME = "produce-quality"
+$env:TASK2_MODEL_VERSION = "auto"
+$env:TASK2_EPOCHS = "20"
+$env:TASK2_NO_PRETRAINED = "0"
+c:/Users/jacob/Documents/Projects/UNI/.venv/Scripts/python.exe task2_quality/training_pipeline.py
+```
+
 ## Train the Model
 
 From repo root (`AAI`):
