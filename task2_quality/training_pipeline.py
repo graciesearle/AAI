@@ -36,8 +36,63 @@ from torchvision.models import ResNet50_Weights
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_MODEL_OUTPUT_PATH = REPO_ROOT / "models" / "produce-quality" / "1.0.0" / "artifacts" / "model.pth"
-DEFAULT_PLOT_OUTPUT_PATH = REPO_ROOT / "local" / "AAI_DOCS" / "task2_learning_curves.png"
+DEFAULT_MODEL_ROOT = REPO_ROOT / "models"
+DEFAULT_MODEL_NAME = "produce-quality"
+DEFAULT_MODEL_VERSION = "auto"
+DEFAULT_PLOT_OUTPUT_DIR = REPO_ROOT / "docs" / "task2"
+
+
+def _parse_semver(version: str) -> Tuple[int, int, int] | None:
+    parts = version.split(".")
+    if len(parts) != 3:
+        return None
+
+    try:
+        major, minor, patch = (int(part) for part in parts)
+    except ValueError:
+        return None
+
+    if major < 0 or minor < 0 or patch < 0:
+        return None
+
+    return major, minor, patch
+
+
+def _next_model_version(*, model_root: Path, model_name: str) -> str:
+    model_dir = model_root / model_name
+    if not model_dir.exists() or not model_dir.is_dir():
+        return "1.0.0"
+
+    parsed_versions: list[Tuple[int, int, int]] = []
+    for child in model_dir.iterdir():
+        if not child.is_dir():
+            continue
+        parsed = _parse_semver(child.name)
+        if parsed is not None:
+            parsed_versions.append(parsed)
+
+    if not parsed_versions:
+        return "1.0.0"
+
+    major, minor, patch = max(parsed_versions)
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def resolve_output_paths(cfg: "RunConfig") -> tuple[str, Path, Path]:
+    configured_version = cfg.model_version.strip()
+    if configured_version.lower() == "auto":
+        resolved_version = _next_model_version(model_root=cfg.model_root, model_name=cfg.model_name)
+    else:
+        resolved_version = configured_version
+
+    model_output_path = (
+        cfg.model_root / cfg.model_name / resolved_version / "artifacts" / "model.pth"
+    )
+    plot_output_path = (
+        cfg.plot_output_dir
+        / f"task2_learning_curves_{cfg.model_name}_{resolved_version}.png"
+    )
+    return resolved_version, model_output_path, plot_output_path
 
 
 @dataclass
@@ -73,8 +128,10 @@ class RunConfig:
     num_workers: int = 2
     seed: int = 42
     no_pretrained: bool = False
-    save_model_path: Path = DEFAULT_MODEL_OUTPUT_PATH
-    save_plot_path: Path = DEFAULT_PLOT_OUTPUT_PATH
+    model_root: Path = DEFAULT_MODEL_ROOT
+    model_name: str = DEFAULT_MODEL_NAME
+    model_version: str = DEFAULT_MODEL_VERSION
+    plot_output_dir: Path = DEFAULT_PLOT_OUTPUT_DIR
     predict_image: Path | None = None
 
 
@@ -90,8 +147,10 @@ CONFIG = RunConfig(
     num_workers=2,
     seed=42,
     no_pretrained=False,
-    save_model_path=DEFAULT_MODEL_OUTPUT_PATH,
-    save_plot_path=DEFAULT_PLOT_OUTPUT_PATH,
+    model_root=DEFAULT_MODEL_ROOT,
+    model_name=DEFAULT_MODEL_NAME,
+    model_version=DEFAULT_MODEL_VERSION,
+    plot_output_dir=DEFAULT_PLOT_OUTPUT_DIR,
     predict_image=None,
 )
 
@@ -520,6 +579,11 @@ def main() -> None:
     """Run end-to-end training, evaluation, plotting, and optional inference."""
     cfg = CONFIG
     set_seed(cfg.seed)
+    resolved_version, save_model_path, save_plot_path = resolve_output_paths(cfg)
+
+    print(f"Resolved model version: {resolved_version}")
+    print(f"Model output path: {save_model_path}")
+    print(f"Plot output path: {save_plot_path}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -565,19 +629,21 @@ def main() -> None:
     print(f"Validation Loss: {final_val_loss:.4f}")
     print(f"Validation Accuracy: {final_val_acc:.2f}%")
 
-    cfg.save_model_path.parent.mkdir(parents=True, exist_ok=True)
+    save_model_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "model_state_dict": model.state_dict(),
             "class_names": class_names,
             "image_size": cfg.image_size,
+            "model_name": cfg.model_name,
+            "model_version": resolved_version,
         },
-        cfg.save_model_path,
+        save_model_path,
     )
-    print(f"Saved model weights to: {cfg.save_model_path}")
+    print(f"Saved model weights to: {save_model_path}")
 
-    plot_learning_curves(history=history, save_path=cfg.save_plot_path)
-    print(f"Saved learning curves to: {cfg.save_plot_path}")
+    plot_learning_curves(history=history, save_path=save_plot_path)
+    print(f"Saved learning curves to: {save_plot_path}")
 
     if cfg.predict_image is not None:
         label, confidence = predict_single_image(

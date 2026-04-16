@@ -33,7 +33,8 @@ class Task2QualityContractTests(TestCase):
         self.assertIn(response.data["predicted_class"], {"fresh", "rotten"})
         self.assertIn("overall_grade", response.data)
         self.assertIn("class_probabilities", response.data)
-        self.assertEqual(response.data["model_version_used"], "1.0.0")
+        self.assertIsInstance(response.data["model_version_used"], str)
+        self.assertTrue(response.data["model_version_used"].strip())
         self.assertNotEqual(
             str(response.data.get("explanation_payload", {}).get("note", "")).lower(),
             "stub-response",

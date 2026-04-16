@@ -139,8 +139,13 @@ docker compose ps
 
 ## How to test Task 2 now
 
-The current Task 2 runtime is scaffolded and returns deterministic stub output.
+The current Task 2 runtime attempts trained-model inference first and falls back
+to image-signal inference when checkpoint loading fails.
 Use these tests to validate contract and DESD integration.
+
+Model training and lifecycle upload instructions are documented here:
+
+- `docs/task2/training_and_upload.md`
 
 ### A) Direct AI service test (quick contract check)
 
@@ -193,7 +198,7 @@ PY
 
 ## Readiness status
 
-Current state is integration-ready scaffold, not final production model serving.
+Current state is integration-ready with real Task 2 inference wiring and Task 3 lifecycle APIs.
 
 Ready now:
 
@@ -203,10 +208,10 @@ Ready now:
 
 Still to implement:
 
-- real model loading/inference in `task2_quality/runtime.py`
-- strict manifest enforcement (currently tolerant during bootstrap)
+- train and activate a production-quality Task 2 checkpoint for default runtime usage
+- harden Task 3 endpoint authn/authz policy for production deployment
 - real recommendation/XAI logic for Task 1 and Task 4
-- contract and failure-mode tests beyond smoke coverage
+- broader performance and stress tests beyond current contract coverage
 
 ## Development priorities
 
