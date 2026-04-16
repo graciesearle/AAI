@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ai_core.config import get_service_config
+from ai_core.lifecycle import get_active_model_version
 from ai_core.manifest import ManifestError, load_manifest
 from task2_quality.runtime import run_quality_inference
 from task2_quality.serializers import (
@@ -18,7 +19,12 @@ class QualityPredictView(APIView):
 
         cfg = get_service_config()
         model_name = cfg.default_model_name
-        model_version = serializer.validated_data.get("model_version", cfg.default_model_version)
+        requested_model_version = serializer.validated_data.get("model_version")
+        model_version = (
+            requested_model_version
+            or get_active_model_version(cfg.model_root, model_name)
+            or cfg.default_model_version
+        )
 
         try:
             manifest = load_manifest(cfg.model_root, model_name, model_version)

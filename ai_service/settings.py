@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "ai_core.apps.AiCoreConfig",
     "task1_recommendation.apps.Task1RecommendationConfig",
     "task2_quality.apps.Task2QualityConfig",
+    "task3_lifecycle.apps.Task3LifecycleConfig",
     "task4_xai.apps.Task4XaiConfig",
 ]
 
