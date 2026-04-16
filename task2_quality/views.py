@@ -34,6 +34,7 @@ class QualityPredictView(APIView):
         try:
             payload = run_quality_inference(
                 image_file=serializer.validated_data["image"],
+                model_root=cfg.model_root,
                 model_name=model_name,
                 model_version=model_version,
                 manifest=manifest,
