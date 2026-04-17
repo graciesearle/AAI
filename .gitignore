@@ -1,5 +1,7 @@
 # Local folder - for storing anything that is generated/used locally such as for testing
 local/
+# Data folder - for storing any datasets, trained models, or other large files that should not be checked into version control
+task2_data/
 
 # Created by https://www.toptal.com/developers/gitignore/api/django
 # Edit at https://www.toptal.com/developers/gitignore?templates=django
