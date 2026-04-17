@@ -122,7 +122,7 @@ python -c "import os,django,uuid; os.environ.setdefault('DJANGO_SETTINGS_MODULE'
 After activation, verify Task 2 output note is model-backed:
 
 - Expected model mode note: `trained-model-inference-v1`
-- Fallback note: `image-signal-fallback-v1`
+- If model loading/inference fails, the API now returns a failure response (no fallback mode).
 
 Quick check:
 

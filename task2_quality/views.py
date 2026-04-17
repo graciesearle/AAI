@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 from ai_core.config import get_service_config
 from ai_core.lifecycle import get_active_model_version
 from ai_core.manifest import ManifestError, load_manifest
+from task2_quality.model_inference import ModelInferenceError
 from task2_quality.runtime import run_quality_inference
 from task2_quality.serializers import (
     QualityPredictRequestSerializer,
@@ -38,6 +39,11 @@ class QualityPredictView(APIView):
                 model_name=model_name,
                 model_version=model_version,
                 manifest=manifest,
+            )
+        except ModelInferenceError as exc:
+            return Response(
+                {"detail": f"Model inference failed for '{model_name}/{model_version}': {exc}"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
