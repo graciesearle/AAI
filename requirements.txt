@@ -3,3 +3,5 @@ numpy
 Pillow
 torch
 torchvision
+kaggle
+certifi
