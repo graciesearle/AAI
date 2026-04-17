@@ -139,13 +139,16 @@ docker compose ps
 
 ## How to test Task 2 now
 
-The current Task 2 runtime attempts trained-model inference first and falls back
-to image-signal inference when checkpoint loading fails.
+The current Task 2 runtime uses strict trained-model inference only.
+If checkpoint loading/inference fails, Task 2 returns a failure response.
 Use these tests to validate contract and DESD integration.
 
 Model training and lifecycle upload instructions are documented here:
 
 - `docs/task2/training_and_upload.md`
+- `docs/task2/task2_task3_completion_runbook.md`
+- `notebooks/task2_colab_simple.ipynb` (Task 2 training only; switch Colab/local via the top cell)
+- `notebooks/task3_lifecycle_ops.ipynb` (Task 3 upload/activate/verify only)
 
 This guide includes dynamic versioning plus CLI and environment-variable overrides.
 
