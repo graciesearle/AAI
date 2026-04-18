@@ -690,7 +690,8 @@ def evaluate(
 def train_model(
     model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
     cls_criterion: nn.Module, quality_criterion: nn.Module,
-    optimizer: torch.optim.Optimizer, quality_loss_weight: float,
+    optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+    quality_loss_weight: float,
     quality_warmup_epochs: int, device: torch.device,
     num_epochs: int, patience: int, early_stop_min_delta: float,
 ) -> Tuple[nn.Module, History]:
@@ -717,6 +718,7 @@ def train_model(
             q_loss = quality_criterion(q_preds, quality_targets)
             loss = cls_loss + eff_q_weight * q_loss
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             bs = labels.size(0)
@@ -760,6 +762,9 @@ def train_model(
             no_improve = 0
         else:
             no_improve += 1
+
+        if scheduler is not None:
+            scheduler.step()
 
         if no_improve >= patience:
             print("Early stopping triggered.")
@@ -873,9 +878,12 @@ def main() -> None:
     head_params = [p for n, p in model.named_parameters()
                    if p.requires_grad and "backbone" not in n]
     optimizer = Adam([
-        {"params": backbone_params, "lr": cfg.learning_rate * 0.1},
+        {"params": backbone_params, "lr": cfg.learning_rate * 0.05},
         {"params": head_params, "lr": cfg.learning_rate},
     ], weight_decay=cfg.weight_decay)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cfg.epochs, eta_min=1e-6,
+    )
 
     trained_now = False
     history = History([], [], [], [], [], [], [], [])
@@ -890,7 +898,7 @@ def main() -> None:
         model, history = train_model(
             model=model, train_loader=train_loader, val_loader=val_loader,
             cls_criterion=cls_criterion, quality_criterion=quality_criterion,
-            optimizer=optimizer, quality_loss_weight=cfg.quality_loss_weight,
+            optimizer=optimizer, scheduler=scheduler, quality_loss_weight=cfg.quality_loss_weight,
             quality_warmup_epochs=cfg.quality_warmup_epochs, device=device,
             num_epochs=cfg.epochs, patience=cfg.patience,
             early_stop_min_delta=cfg.early_stop_min_delta,
