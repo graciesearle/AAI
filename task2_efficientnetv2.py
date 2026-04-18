@@ -62,13 +62,13 @@ class RunConfig:
     dataset_dir: Path = Path("FruitAndVegetableDataset")
     epochs: int = 20
     batch_size: int = 32
-    learning_rate: float = 1e-3
+    learning_rate: float = 3e-4
     weight_decay: float = 1e-4
     label_smoothing: float = 0.05
     quality_loss_weight: float = 0.1
     quality_warmup_epochs: int = 3
     image_size: int = 224
-    patience: int = 20
+    patience: int = 5
     early_stop_min_delta: float = 1e-4
     num_workers: int = 2
     seed: int = 42
@@ -82,13 +82,13 @@ CONFIG = RunConfig(
     dataset_dir=Path("FruitAndVegetableDataset"),
     epochs=20,
     batch_size=32,
-    learning_rate=1e-3,
+    learning_rate=3e-4,
     weight_decay=1e-4,
     label_smoothing=0.05,
     quality_loss_weight=0.1,
     quality_warmup_epochs=3,
     image_size=224,
-    patience=20,
+    patience=5,
     early_stop_min_delta=1e-4,
     num_workers=2,
     seed=42,
@@ -431,8 +431,9 @@ def build_transforms(image_size: int) -> Tuple[transforms.Compose, transforms.Co
         transforms.RandomRotation(degrees=20),
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
-        AddGaussianNoise(mean=0.0, std=0.03),
+        AddGaussianNoise(mean=0.0, std=0.03),  # applied on [0,1] range before Normalize
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.15, scale=(0.02, 0.2)),
     ])
     val_transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
@@ -487,7 +488,8 @@ def compute_class_weights(targets: List[int], num_classes: int) -> torch.Tensor:
     target_tensor = torch.tensor(targets, dtype=torch.long)
     class_counts = torch.clamp(torch.bincount(target_tensor, minlength=num_classes).float(), min=1.0)
     weights = class_counts.sum() / (num_classes * class_counts)
-    return weights / weights.mean()
+    weights = weights / weights.mean()
+    return torch.clamp(weights, max=10.0)  # cap at 10x to prevent extreme loss spikes
 
 
 def create_dataloaders(
@@ -537,16 +539,32 @@ class MultiTaskProduceNet(nn.Module):
         super().__init__()
         self.backbone = backbone
         self.classifier_head = nn.Sequential(
-            nn.Dropout(p=0.3),
+            nn.Dropout(p=0.5),
             nn.Linear(feature_dim, num_classes),
         )
         self.quality_head = nn.Sequential(
             nn.Linear(feature_dim, 256),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=0.2),
+            nn.Dropout(p=0.3),
             nn.Linear(256, 3),
             nn.Sigmoid(),
         )
+
+    def train(self, mode: bool = True) -> "MultiTaskProduceNet":
+        """Override train() to keep frozen BN layers in eval mode.
+
+        EfficientNetV2 has batch norm throughout. When layers are frozen, their
+        BN running stats should not be updated during training — otherwise eval
+        mode uses stale ImageNet stats, causing massive train/val discrepancy.
+        """
+        super().train(mode)
+        if mode:
+            for module in self.backbone.modules():
+                if isinstance(module, (nn.BatchNorm2d, nn.SyncBatchNorm)):
+                    # Only keep BN in eval for frozen layers.
+                    if not any(p.requires_grad for p in module.parameters()):
+                        module.eval()
+        return self
 
     def forward(self, images: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         features = self.backbone(images)
@@ -704,7 +722,11 @@ def train_model(
 
     for epoch in range(num_epochs):
         model.train()
-        eff_q_weight = quality_loss_weight if epoch >= quality_warmup_epochs else 0.0
+        # Linear warmup: ramp quality weight from 0 to full over warmup period
+        if quality_warmup_epochs > 0 and epoch < quality_warmup_epochs:
+            eff_q_weight = quality_loss_weight * (epoch / quality_warmup_epochs)
+        else:
+            eff_q_weight = quality_loss_weight
         t_total = t_cls = t_q = 0.0
         correct = total = 0
 
@@ -878,7 +900,7 @@ def main() -> None:
     head_params = [p for n, p in model.named_parameters()
                    if p.requires_grad and "backbone" not in n]
     optimizer = Adam([
-        {"params": backbone_params, "lr": cfg.learning_rate * 0.05},
+        {"params": backbone_params, "lr": cfg.learning_rate * 0.01},
         {"params": head_params, "lr": cfg.learning_rate},
     ], weight_decay=cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
