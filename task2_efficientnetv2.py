@@ -169,7 +169,7 @@ def assign_overall_grade(scores: QualityScores) -> str:
     """Assign grade using strict thresholds: A>=85/90/80, C<65/70/60, else B."""
     if scores.colour < 65.0 or scores.size < 70.0 or scores.ripeness < 60.0:
         return "C"
-    if scores.colour >= 75.0 and scores.size >= 80.0 and scores.ripeness >= 75.0:
+    if scores.colour >= 75.0 and scores.size >= 80.0 and scores.ripeness >= 70.0:
         return "A"
     return "B"
 
