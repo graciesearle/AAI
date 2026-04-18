@@ -66,14 +66,17 @@ class RunConfig:
     epochs: int = 20
     batch_size: int = 32
     learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
+    label_smoothing: float = 0.05
     quality_loss_weight: float = 0.4
     image_size: int = 224
-    patience: int = 5
+    patience: int = 20
+    early_stop_min_delta: float = 1e-4
     num_workers: int = 2
     seed: int = 42
     # Transfer learning must be enabled by default for Task 2 compliance.
     no_pretrained: bool = False
-    save_model_path: Path = Path("fresh_rotten_resnet501.pth")
+    save_model_path: Path = Path("fresh_rotten_resnet50.pth")
     save_plot_path: Path = Path("learning_curves.png")
     predict_image: Path | None = None
     # File-based Kaggle setup (replace placeholder values before first run).
@@ -89,13 +92,16 @@ CONFIG = RunConfig(
     epochs=20,
     batch_size=32,
     learning_rate=1e-3,
+    weight_decay=1e-4,
+    label_smoothing=0.05,
     quality_loss_weight=0.4,
     image_size=224,
-    patience=5,
+    patience=20,
+    early_stop_min_delta=1e-4,
     num_workers=2,
     seed=42,
     no_pretrained=False,
-    save_model_path=Path("fresh_rotten_resnet501.pth"),
+    save_model_path=Path("fresh_rotten_resnet50.pth"),
     save_plot_path=Path("learning_curves.png"),
     predict_image=None,
     auto_download_from_kaggle=True,
@@ -714,19 +720,59 @@ def build_transforms(image_size: int) -> Tuple[transforms.Compose, transforms.Co
 
 
 def split_indices(
-    num_samples: int,
+    targets: List[int],
     train_ratio: float,
     seed: int,
 ) -> Tuple[List[int], List[int]]:
-    """Create deterministic train/validation indices."""
-    indices = list(range(num_samples))
-    rng = random.Random(seed)
-    rng.shuffle(indices)
+    """Create deterministic stratified train/validation indices by class."""
+    if not targets:
+        raise ValueError("Cannot split an empty dataset.")
 
-    train_size = int(num_samples * train_ratio)
-    train_indices = indices[:train_size]
-    val_indices = indices[train_size:]
+    class_to_indices: Dict[int, List[int]] = {}
+    for index, target in enumerate(targets):
+        class_to_indices.setdefault(target, []).append(index)
+
+    rng = random.Random(seed)
+    train_indices: List[int] = []
+    val_indices: List[int] = []
+
+    for class_indices in class_to_indices.values():
+        rng.shuffle(class_indices)
+
+        if len(class_indices) == 1:
+            train_indices.extend(class_indices)
+            continue
+
+        train_size = int(len(class_indices) * train_ratio)
+        train_size = min(max(train_size, 1), len(class_indices) - 1)
+        train_indices.extend(class_indices[:train_size])
+        val_indices.extend(class_indices[train_size:])
+
+    if not val_indices:
+        rng.shuffle(train_indices)
+        fallback_val_size = max(1, int(len(train_indices) * (1.0 - train_ratio)))
+        val_indices = train_indices[-fallback_val_size:]
+        train_indices = train_indices[:-fallback_val_size]
+
+    if not train_indices or not val_indices:
+        raise ValueError("Failed to create non-empty train/validation splits.")
+
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
     return train_indices, val_indices
+
+
+def compute_class_weights(targets: List[int], num_classes: int) -> torch.Tensor:
+    """Compute normalized inverse-frequency class weights from train targets."""
+    if not targets:
+        raise ValueError("Cannot compute class weights without training targets.")
+
+    target_tensor = torch.tensor(targets, dtype=torch.long)
+    class_counts = torch.bincount(target_tensor, minlength=num_classes).float()
+    class_counts = torch.clamp(class_counts, min=1.0)
+
+    weights = class_counts.sum() / (num_classes * class_counts)
+    return weights / weights.mean()
 
 
 def create_dataloaders(
@@ -735,8 +781,8 @@ def create_dataloaders(
     batch_size: int,
     num_workers: int,
     seed: int,
-) -> Tuple[DataLoader, DataLoader, List[str]]:
-    """Build train and validation data loaders using an 80/20 split."""
+) -> Tuple[DataLoader, DataLoader, List[str], torch.Tensor]:
+    """Build train/val loaders and class weights using a stratified 80/20 split."""
     resolved_dataset_dir = resolve_dataset_root(dataset_dir)
     if resolved_dataset_dir is None:
         raise FileNotFoundError(
@@ -751,9 +797,14 @@ def create_dataloaders(
 
     class_names = base_dataset.classes
     train_indices, val_indices = split_indices(
-        num_samples=len(base_dataset),
+        targets=base_dataset.targets,
         train_ratio=0.8,
         seed=seed,
+    )
+    train_targets = [base_dataset.targets[index] for index in train_indices]
+    class_weights = compute_class_weights(
+        targets=train_targets,
+        num_classes=len(class_names),
     )
 
     train_dataset = QualityProxyImageFolder(
@@ -785,7 +836,7 @@ def create_dataloaders(
         pin_memory=torch.cuda.is_available(),
     )
 
-    return train_loader, val_loader, class_names
+    return train_loader, val_loader, class_names, class_weights
 
 
 class MultiTaskProduceNet(nn.Module):
@@ -1041,8 +1092,9 @@ def train_model(
     device: torch.device,
     num_epochs: int,
     patience: int,
+    early_stop_min_delta: float,
 ) -> Tuple[nn.Module, History]:
-    """Train multitask model with early stopping on validation total loss."""
+    """Train multitask model with early stopping on validation cls loss."""
     history = History(
         train_total_loss=[],
         val_total_loss=[],
@@ -1055,7 +1107,8 @@ def train_model(
     )
 
     best_model_wts = copy.deepcopy(model.state_dict())
-    best_val_total_loss = float("inf")
+    best_val_cls_loss = float("inf")
+    best_val_acc = 0.0
     epochs_without_improvement = 0
 
     for epoch in range(num_epochs):
@@ -1121,8 +1174,15 @@ def train_model(
             f"Val Q: {val_quality_loss:.4f} | Val Acc: {val_acc:.2f}%"
         )
 
-        if val_total_loss < best_val_total_loss:
-            best_val_total_loss = val_total_loss
+        improved_loss = val_cls_loss < (best_val_cls_loss - early_stop_min_delta)
+        improved_acc_tie_break = (
+            abs(val_cls_loss - best_val_cls_loss) <= early_stop_min_delta
+            and val_acc > best_val_acc
+        )
+
+        if improved_loss or improved_acc_tie_break:
+            best_val_cls_loss = val_cls_loss
+            best_val_acc = val_acc
             best_model_wts = copy.deepcopy(model.state_dict())
             epochs_without_improvement = 0
         else:
@@ -1230,7 +1290,7 @@ def main() -> None:
 
     dataset_root = ensure_dataset_available(cfg)
 
-    train_loader, val_loader, class_names = create_dataloaders(
+    train_loader, val_loader, class_names, class_weights = create_dataloaders(
         dataset_dir=dataset_root,
         image_size=cfg.image_size,
         batch_size=cfg.batch_size,
@@ -1245,12 +1305,16 @@ def main() -> None:
         use_pretrained=not cfg.no_pretrained,
     )
 
-    cls_criterion = nn.CrossEntropyLoss()
+    cls_criterion = nn.CrossEntropyLoss(
+        weight=class_weights.to(device),
+        label_smoothing=cfg.label_smoothing,
+    )
     quality_criterion = nn.MSELoss()
 
     optimizer = Adam(
         params=[p for p in model.parameters() if p.requires_grad],
         lr=cfg.learning_rate,
+        weight_decay=cfg.weight_decay,
     )
     trained_now = False
     has_quality_head_weights = True
@@ -1323,6 +1387,7 @@ def main() -> None:
             device=device,
             num_epochs=cfg.epochs,
             patience=cfg.patience,
+            early_stop_min_delta=cfg.early_stop_min_delta,
         )
         trained_now = True
 
@@ -1378,7 +1443,7 @@ def main() -> None:
             raise FileNotFoundError(
                 f"No supported image files found for prediction in: {dataset_root}"
             )
-        prediction_image = random.choice(dataset_images)
+        prediction_image = random.SystemRandom().choice(dataset_images)
         print(f"Selected random dataset image for prediction: {prediction_image}")
 
     if not prediction_image.exists() or not prediction_image.is_file():
