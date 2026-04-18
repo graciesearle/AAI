@@ -305,7 +305,7 @@ def _safe_pil_loader(path: str) -> Image.Image:
 
 
 class QualityProxyImageFolder(datasets.ImageFolder):
-    """ImageFolder variant that returns proxy quality targets per sample."""
+    """ImageFolder variant that returns pre-cached proxy quality targets per sample."""
 
     def __init__(
         self,
@@ -314,6 +314,7 @@ class QualityProxyImageFolder(datasets.ImageFolder):
         target_transform=None,
         loader=_safe_pil_loader,
         validated_samples: List[Tuple[str, int]] | None = None,
+        cached_quality_targets: List[torch.Tensor] | None = None,
     ) -> None:
         super().__init__(root=root, transform=transform,
                          target_transform=target_transform, loader=loader)
@@ -328,6 +329,23 @@ class QualityProxyImageFolder(datasets.ImageFolder):
 
         self.imgs = self.samples
         self.targets = [target for _, target in self.samples]
+
+        # Pre-compute quality targets once to avoid repeated HSV analysis.
+        if cached_quality_targets is not None:
+            self._quality_cache = list(cached_quality_targets)
+        else:
+            print(f"Pre-computing quality proxy targets for {len(self.samples)} images...")
+            self._quality_cache = []
+            for i, (path, _) in enumerate(self.samples):
+                try:
+                    img = self.loader(path)
+                    qt = torch.tensor(compute_quality_proxy_targets(img), dtype=torch.float32)
+                except Exception:
+                    qt = torch.zeros(3, dtype=torch.float32)
+                self._quality_cache.append(qt)
+                if (i + 1) % 2000 == 0:
+                    print(f"  ...processed {i + 1}/{len(self.samples)} images")
+            print("Quality target pre-computation complete.")
 
     @staticmethod
     def _is_readable_image(path: str) -> bool:
@@ -352,7 +370,7 @@ class QualityProxyImageFolder(datasets.ImageFolder):
         except (UnidentifiedImageError, OSError) as exc:
             raise RuntimeError(f"Unreadable image encountered after validation: {path}") from exc
 
-        quality_target = torch.tensor(compute_quality_proxy_targets(sample), dtype=torch.float32)
+        quality_target = self._quality_cache[index]
 
         if self.transform is not None:
             sample = self.transform(sample)
@@ -494,9 +512,11 @@ def create_dataloaders(
     )
 
     train_ds = QualityProxyImageFolder(root=str(resolved), transform=train_tf,
-                                       validated_samples=base_dataset.samples)
+                                       validated_samples=base_dataset.samples,
+                                       cached_quality_targets=base_dataset._quality_cache)
     val_ds = QualityProxyImageFolder(root=str(resolved), transform=val_tf,
-                                     validated_samples=base_dataset.samples)
+                                     validated_samples=base_dataset.samples,
+                                     cached_quality_targets=base_dataset._quality_cache)
 
     pin = torch.cuda.is_available()
     train_loader = DataLoader(Subset(train_ds, train_idx), batch_size=batch_size,
