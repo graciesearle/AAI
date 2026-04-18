@@ -20,12 +20,10 @@
 - Task 3 lifecycle: `task2_3_4/task3_lifecycle/`
 - Task 4 XAI: `task2_3_4/task4_xai/`
 
-## Shared Code To Prevent Drift
+## Task 2 Reset Status
 
-- Grading and inventory thresholds centralized in `task2_3_4/shared/quality_rules.py`.
-- Consumers:
-  - `task2_3_4/task2_quality/postprocess.py`
-  - `task2_3_4/task2_raw_files/train_fresh_rotten_classifier.py`
+- Task 2 post-processing has been intentionally removed to allow a fresh reimplementation.
+- New quality-scoring/grading logic should be introduced in `task2_3_4/task2_quality/runtime.py` (or helper modules referenced by it).
 
 ## Handoff Checklist
 

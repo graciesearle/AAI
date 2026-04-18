@@ -111,13 +111,13 @@ class Task2QualityContractTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(response.data["predicted_class"], {"fresh", "rotten"})
-        self.assertIn("overall_grade", response.data)
+        self.assertEqual(response.data.get("overall_grade"), "UNSET")
         self.assertIn("class_probabilities", response.data)
         self.assertIsInstance(response.data["model_version_used"], str)
         self.assertTrue(response.data["model_version_used"].strip())
-        self.assertNotEqual(
+        self.assertEqual(
             str(response.data.get("explanation_payload", {}).get("note", "")).lower(),
-            "stub-response",
+            "task2-blank-slate",
         )
 
     @override_settings(MODEL_ROOT=Path(tempfile.gettempdir()) / "missing-aai-model-root")

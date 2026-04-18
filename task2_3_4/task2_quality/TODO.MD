@@ -1,1 +1,2 @@
 TEMP FILE DIR FOR API ENDPOINT, NOT FINAL AT ALL!
+CURRENTLY NOT WIRED UP PROPERLY, JUST SIMPLE task_2_train_fresh_rotten_classifier.py file script

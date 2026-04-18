@@ -17,16 +17,12 @@ Assessment guidance in `task2_3_4/reference/AAI_DOCS/faqs.md` states the AI repo
 
 This structure follows that requirement and keeps CV + lifecycle + XAI together.
 
-## Shared Task 2 Logic (No Duplicate Upgrade Paths)
+## Task 2 Implementation Status
 
-To reduce duplication between Task 2 runtime and Task 2 raw/training work, shared grading rules now live in:
+Task 2 post-processing logic has been intentionally reset to a blank slate for the next implementation pass.
 
-- `task2_3_4/shared/quality_rules.py`
-
-Both of these now consume shared grade/threshold/inventory rules:
-
-- `task2_3_4/task2_quality/postprocess.py`
-- `task2_3_4/task2_raw_files/train_fresh_rotten_classifier.py`
+- Current runtime baseline: `task2_3_4/task2_quality/runtime.py`
+- Next implementation owner can add quality scoring and grading logic there (or in helper modules it imports).
 
 ## API Endpoints
 
@@ -72,6 +68,17 @@ Or run helper:
 ```bash
 ./aai_api/setup_ai.sh
 ```
+
+# Simply build for DESD
+
+- Check that in AAI:
+  python manage.py check: success
+  python manage.py migrate: success
+
+- Then From AAI/aai_api folder:
+  docker build -t desd-ai-service:latest .
+  From DESD folder (with profile):
+  docker compose --profile ai up -d --build
 
 ## Ownership Split (Recommended)
 

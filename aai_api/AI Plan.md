@@ -93,7 +93,7 @@ models/
          model.pth
          label_map.json
          preprocessing.json
-         postprocessing.json
+         output_schema.json
          xai_config.json
          extra_assets/...
 ```

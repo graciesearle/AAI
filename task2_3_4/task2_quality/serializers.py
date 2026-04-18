@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-
+# TODO: FINISH
 class QualityPredictRequestSerializer(serializers.Serializer):
     producer_id = serializers.IntegerField(required=True)
     product_id = serializers.IntegerField(required=False)

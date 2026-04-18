@@ -14,7 +14,7 @@ def build_explanation(*, model_name: str, model_version: str, context: dict[str,
             "model_name": model_name,
             "context": context or {},
             "derivation": {
-                "quality_rules": "kept in DESD policy layer",
+                "policy_layer": "kept in DESD integration layer",
                 "model_reasoning": "placeholder attribution",
             },
         },
