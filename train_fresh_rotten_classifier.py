@@ -11,6 +11,7 @@ The project remains fully computer-vision/deep-learning based.
 from __future__ import annotations
 
 import copy
+import importlib
 import os
 import random
 import shutil
@@ -18,10 +19,11 @@ import ssl
 import subprocess
 import sys
 import urllib.request
+import warnings
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.error import URLError
 
 import matplotlib.pyplot as plt
@@ -68,7 +70,8 @@ class RunConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     label_smoothing: float = 0.05
-    quality_loss_weight: float = 0.4
+    quality_loss_weight: float = 0.1
+    quality_warmup_epochs: int = 3
     image_size: int = 224
     patience: int = 20
     early_stop_min_delta: float = 1e-4
@@ -78,6 +81,11 @@ class RunConfig:
     no_pretrained: bool = False
     save_model_path: Path = Path("fresh_rotten_resnet50.pth")
     save_plot_path: Path = Path("learning_curves.png")
+    use_mlp_quality_mapper: bool = True
+    quality_mapper_path: Path = Path("quality_mapper_mlp.joblib")
+    mapper_hidden_layer_sizes: Tuple[int, ...] = (128, 64)
+    mapper_max_iter: int = 250
+    mapper_train_max_samples: int = 12000
     predict_image: Path | None = None
     # File-based Kaggle setup (replace placeholder values before first run).
     auto_download_from_kaggle: bool = True
@@ -94,7 +102,8 @@ CONFIG = RunConfig(
     learning_rate=1e-3,
     weight_decay=1e-4,
     label_smoothing=0.05,
-    quality_loss_weight=0.4,
+    quality_loss_weight=0.1,
+    quality_warmup_epochs=3,
     image_size=224,
     patience=20,
     early_stop_min_delta=1e-4,
@@ -103,6 +112,11 @@ CONFIG = RunConfig(
     no_pretrained=False,
     save_model_path=Path("fresh_rotten_resnet50.pth"),
     save_plot_path=Path("learning_curves.png"),
+    use_mlp_quality_mapper=True,
+    quality_mapper_path=Path("quality_mapper_mlp.joblib"),
+    mapper_hidden_layer_sizes=(128, 64),
+    mapper_max_iter=250,
+    mapper_train_max_samples=12000,
     predict_image=None,
     auto_download_from_kaggle=True,
     kaggle_dataset="muhammad0subhan/fruit-and-vegetable-disease-healthy-vs-rotten",
@@ -329,6 +343,7 @@ def process_prediction(
     confidence: float,
     quality_scores: Dict[str, float] | QualityScores | None = None,
     image_path: str | Path | None = None,
+    quality_source_override: str | None = None,
 ) -> Dict[str, object]:
     """End-to-end post-processing for a single deep-model prediction.
 
@@ -343,7 +358,7 @@ def process_prediction(
     image_metrics: Dict[str, float] | None = None
     if quality_scores is not None:
         scores = validate_quality_scores(quality_scores)
-        quality_source = "cnn_quality_head"
+        quality_source = quality_source_override or "cnn_quality_head"
     elif image_path is not None:
         scores, image_metrics = generate_quality_attributes_from_image(image_path)
         quality_source = "image_postprocessing_fallback"
@@ -379,6 +394,20 @@ def process_prediction(
     return result
 
 
+def _safe_pil_loader(path: str) -> Image.Image:
+    """Load an image robustly, handling palette transparency before RGB conversion."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Palette images with Transparency expressed in bytes should be converted to RGBA images",
+            category=UserWarning,
+        )
+        with Image.open(path) as image:
+            if image.mode == "P" and "transparency" in image.info:
+                image = image.convert("RGBA")
+            return image.convert("RGB")
+
+
 class QualityProxyImageFolder(datasets.ImageFolder):
     """ImageFolder variant that returns proxy quality targets per sample."""
 
@@ -387,9 +416,15 @@ class QualityProxyImageFolder(datasets.ImageFolder):
         root: str,
         transform=None,
         target_transform=None,
+        loader=_safe_pil_loader,
         validated_samples: List[Tuple[str, int]] | None = None,
     ) -> None:
-        super().__init__(root=root, transform=transform, target_transform=target_transform)
+        super().__init__(
+            root=root,
+            transform=transform,
+            target_transform=target_transform,
+            loader=loader,
+        )
 
         if validated_samples is not None:
             self.samples = list(validated_samples)
@@ -408,8 +443,7 @@ class QualityProxyImageFolder(datasets.ImageFolder):
     def _is_readable_image(path: str) -> bool:
         """Return True if Pillow can open and verify an image file."""
         try:
-            with Image.open(path) as image:
-                image.verify()
+            _safe_pil_loader(path)
             return True
         except (UnidentifiedImageError, OSError, ValueError):
             return False
@@ -1037,6 +1071,251 @@ def _list_dataset_images(dataset_root: Path) -> List[Path]:
     ]
 
 
+def _mlp_mapper_dependencies_available() -> bool:
+    """Return True when optional dependencies for the MLP mapper are installed."""
+    try:
+        _import_mlp_mapper_dependencies()
+    except (ModuleNotFoundError, AttributeError):
+        return False
+    return True
+
+
+def _import_mlp_mapper_dependencies() -> Tuple[Any, Any, Any, Any]:
+    """Dynamically import optional sklearn/joblib dependencies for mapper usage."""
+    joblib_module = importlib.import_module("joblib")
+    sklearn_nn = importlib.import_module("sklearn.neural_network")
+    sklearn_pipeline = importlib.import_module("sklearn.pipeline")
+    sklearn_preprocessing = importlib.import_module("sklearn.preprocessing")
+    return (
+        joblib_module,
+        getattr(sklearn_nn, "MLPRegressor"),
+        getattr(sklearn_pipeline, "Pipeline"),
+        getattr(sklearn_preprocessing, "StandardScaler"),
+    )
+
+
+def _build_mapper_features_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    """Build mapper features from CNN classification outputs."""
+    probabilities = torch.softmax(logits, dim=1)
+    confidence = probabilities.max(dim=1, keepdim=True).values
+    return torch.cat([logits, probabilities, confidence], dim=1)
+
+
+def _extract_mapper_dataset_from_loader(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    max_samples: int = 0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Collect features/targets for mapper training from a dataloader."""
+    model.eval()
+    feature_chunks: List[np.ndarray] = []
+    target_chunks: List[np.ndarray] = []
+    remaining = max_samples if max_samples > 0 else None
+
+    with torch.no_grad():
+        for images, _labels, quality_targets in loader:
+            images = images.to(device)
+            logits, _ = model(images)
+
+            feature_batch = (
+                _build_mapper_features_from_logits(logits)
+                .cpu()
+                .numpy()
+                .astype(np.float32)
+            )
+            target_batch = quality_targets.cpu().numpy().astype(np.float32)
+
+            if remaining is not None:
+                if remaining <= 0:
+                    break
+                keep = min(remaining, feature_batch.shape[0])
+                feature_batch = feature_batch[:keep]
+                target_batch = target_batch[:keep]
+                remaining -= keep
+
+            if feature_batch.size == 0:
+                continue
+
+            feature_chunks.append(feature_batch)
+            target_chunks.append(target_batch)
+
+            if remaining is not None and remaining <= 0:
+                break
+
+    if not feature_chunks:
+        raise ValueError("No samples extracted for MLP quality mapper training.")
+
+    return np.concatenate(feature_chunks, axis=0), np.concatenate(target_chunks, axis=0)
+
+
+def _compute_quality_mae(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+    """Compute MAE for colour, size, and ripeness outputs."""
+    mae = np.mean(np.abs(y_true - y_pred), axis=0)
+    return {
+        "colour_mae": float(mae[0]),
+        "size_mae": float(mae[1]),
+        "ripeness_mae": float(mae[2]),
+        "overall_mae": float(np.mean(mae)),
+    }
+
+
+def load_mlp_quality_mapper(
+    mapper_path: Path,
+    expected_input_dim: int,
+) -> Any | None:
+    """Load a persisted MLP quality mapper when dimensions are compatible."""
+    if not mapper_path.exists() or not mapper_path.is_file():
+        return None
+    if not _mlp_mapper_dependencies_available():
+        return None
+
+    try:
+        joblib_module, _mlp_cls, _pipeline_cls, _scaler_cls = _import_mlp_mapper_dependencies()
+        loaded_obj = joblib_module.load(mapper_path)
+    except Exception as exc:
+        print(f"Warning: Failed to load MLP quality mapper ({exc}).")
+        return None
+
+    if isinstance(loaded_obj, dict):
+        mapper = loaded_obj.get("mapper")
+        saved_dim = loaded_obj.get("expected_input_dim")
+    else:
+        mapper = loaded_obj
+        saved_dim = getattr(mapper, "n_features_in_", None)
+
+    if mapper is None:
+        return None
+
+    if saved_dim is not None and int(saved_dim) != expected_input_dim:
+        print(
+            "Existing MLP quality mapper feature dimension does not match current model. "
+            "Will retrain mapper."
+        )
+        return None
+
+    return mapper
+
+
+def train_mlp_quality_mapper(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    device: torch.device,
+    cfg: RunConfig,
+) -> Any:
+    """Train and save an MLP mapper from CNN outputs to quality percentages."""
+    if not _mlp_mapper_dependencies_available():
+        raise RuntimeError(
+            "MLP mapper dependencies are missing. Install scikit-learn and joblib."
+        )
+
+    joblib_module, mlp_regressor_cls, pipeline_cls, scaler_cls = _import_mlp_mapper_dependencies()
+
+    x_train, y_train = _extract_mapper_dataset_from_loader(
+        model=model,
+        loader=train_loader,
+        device=device,
+        max_samples=cfg.mapper_train_max_samples,
+    )
+
+    val_cap = max(min(cfg.mapper_train_max_samples // 4, 4000), 1000)
+    x_val, y_val = _extract_mapper_dataset_from_loader(
+        model=model,
+        loader=val_loader,
+        device=device,
+        max_samples=val_cap,
+    )
+
+    mapper = pipeline_cls(
+        [
+            ("scaler", scaler_cls()),
+            (
+                "mlp",
+                mlp_regressor_cls(
+                    hidden_layer_sizes=cfg.mapper_hidden_layer_sizes,
+                    activation="relu",
+                    solver="adam",
+                    alpha=1e-4,
+                    learning_rate_init=1e-3,
+                    max_iter=cfg.mapper_max_iter,
+                    early_stopping=True,
+                    validation_fraction=0.1,
+                    n_iter_no_change=15,
+                    random_state=cfg.seed,
+                ),
+            ),
+        ]
+    )
+    mapper.fit(x_train, y_train)
+
+    y_val_pred = np.clip(mapper.predict(x_val), 0.0, 100.0)
+    mae_report = _compute_quality_mae(y_val, y_val_pred)
+    print(
+        "MLP quality mapper validation MAE "
+        f"(colour/size/ripeness/overall): "
+        f"{mae_report['colour_mae']:.2f}/"
+        f"{mae_report['size_mae']:.2f}/"
+        f"{mae_report['ripeness_mae']:.2f}/"
+        f"{mae_report['overall_mae']:.2f}"
+    )
+
+    payload = {
+        "mapper": mapper,
+        "expected_input_dim": int(x_train.shape[1]),
+        "target_names": ["colour", "size", "ripeness"],
+        "algorithm": "sklearn_mlp_regressor",
+    }
+    cfg.quality_mapper_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib_module.dump(payload, cfg.quality_mapper_path)
+    print(f"Saved MLP quality mapper to: {cfg.quality_mapper_path}")
+    return mapper
+
+
+def predict_quality_with_mlp_mapper(
+    model: nn.Module,
+    mapper: Any,
+    image_path: Path,
+    image_size: int,
+    device: torch.device,
+) -> Dict[str, float]:
+    """Predict quality scores using the MLP mapper on CNN outputs."""
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize((image_size, image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            ),
+        ]
+    )
+
+    image = Image.open(image_path).convert("RGB")
+    image_tensor = preprocess(image).unsqueeze(0).to(device)
+
+    model.eval()
+    with torch.no_grad():
+        logits, _ = model(image_tensor)
+        mapper_features = (
+            _build_mapper_features_from_logits(logits)
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
+
+    prediction = np.asarray(mapper.predict(mapper_features), dtype=np.float32).reshape(-1)
+    if prediction.shape[0] < 3:
+        raise RuntimeError("MLP mapper prediction is invalid; expected 3 outputs.")
+
+    prediction = np.clip(prediction[:3], 0.0, 100.0)
+    return {
+        "colour": round(float(prediction[0]), 2),
+        "size": round(float(prediction[1]), 2),
+        "ripeness": round(float(prediction[2]), 2),
+    }
+
+
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
@@ -1089,6 +1368,7 @@ def train_model(
     quality_criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     quality_loss_weight: float,
+    quality_warmup_epochs: int,
     device: torch.device,
     num_epochs: int,
     patience: int,
@@ -1113,6 +1393,9 @@ def train_model(
 
     for epoch in range(num_epochs):
         model.train()
+        effective_quality_loss_weight = (
+            quality_loss_weight if epoch >= quality_warmup_epochs else 0.0
+        )
         train_total_loss_sum = 0.0
         train_cls_loss_sum = 0.0
         train_quality_loss_sum = 0.0
@@ -1129,7 +1412,7 @@ def train_model(
 
             cls_loss = cls_criterion(logits, labels)
             quality_loss = quality_criterion(quality_preds, quality_targets)
-            total_loss = cls_loss + quality_loss_weight * quality_loss
+            total_loss = cls_loss + effective_quality_loss_weight * quality_loss
 
             total_loss.backward()
             optimizer.step()
@@ -1171,7 +1454,8 @@ def train_model(
             f"Train Total: {train_total_loss:.4f} | Train Cls: {train_cls_loss:.4f} | "
             f"Train Q: {train_quality_loss:.4f} | Train Acc: {train_acc:.2f}% | "
             f"Val Total: {val_total_loss:.4f} | Val Cls: {val_cls_loss:.4f} | "
-            f"Val Q: {val_quality_loss:.4f} | Val Acc: {val_acc:.2f}%"
+            f"Val Q: {val_quality_loss:.4f} | Val Acc: {val_acc:.2f}% | "
+            f"QWeight: {effective_quality_loss_weight:.3f}"
         )
 
         improved_loss = val_cls_loss < (best_val_cls_loss - early_stop_min_delta)
@@ -1309,7 +1593,7 @@ def main() -> None:
         weight=class_weights.to(device),
         label_smoothing=cfg.label_smoothing,
     )
-    quality_criterion = nn.MSELoss()
+    quality_criterion = nn.SmoothL1Loss()
 
     optimizer = Adam(
         params=[p for p in model.parameters() if p.requires_grad],
@@ -1384,6 +1668,7 @@ def main() -> None:
             quality_criterion=quality_criterion,
             optimizer=optimizer,
             quality_loss_weight=cfg.quality_loss_weight,
+            quality_warmup_epochs=cfg.quality_warmup_epochs,
             device=device,
             num_epochs=cfg.epochs,
             patience=cfg.patience,
@@ -1436,6 +1721,31 @@ def main() -> None:
     else:
         print("Skipped full evaluation, saving, and plotting because training was not run.")
 
+    quality_mapper = None
+    if cfg.use_mlp_quality_mapper:
+        if _mlp_mapper_dependencies_available():
+            expected_mapper_dim = (2 * len(class_names)) + 1
+            quality_mapper = load_mlp_quality_mapper(
+                mapper_path=cfg.quality_mapper_path,
+                expected_input_dim=expected_mapper_dim,
+            )
+            if quality_mapper is not None:
+                print(f"Loaded existing MLP quality mapper from: {cfg.quality_mapper_path}")
+            else:
+                print("No compatible MLP quality mapper found. Training mapper...")
+                quality_mapper = train_mlp_quality_mapper(
+                    model=model,
+                    train_loader=train_loader,
+                    val_loader=val_loader,
+                    device=device,
+                    cfg=cfg,
+                )
+        else:
+            print(
+                "Warning: scikit-learn/joblib not installed; "
+                "using existing quality-score path without MLP mapper."
+            )
+
     prediction_image = cfg.predict_image
     if prediction_image is None:
         dataset_images = _list_dataset_images(dataset_root)
@@ -1456,7 +1766,21 @@ def main() -> None:
         image_size=cfg.image_size,
         device=device,
     )
-    if has_quality_head_weights:
+    if quality_mapper is not None:
+        mapped_quality_scores = predict_quality_with_mlp_mapper(
+            model=model,
+            mapper=quality_mapper,
+            image_path=prediction_image,
+            image_size=cfg.image_size,
+            device=device,
+        )
+        result = process_prediction(
+            label=label,
+            confidence=confidence_pct / 100.0,
+            quality_scores=mapped_quality_scores,
+            quality_source_override="cnn_output_mlp_mapper",
+        )
+    elif has_quality_head_weights:
         result = process_prediction(
             label=label,
             confidence=confidence_pct / 100.0,
