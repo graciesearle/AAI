@@ -1,16 +1,13 @@
 #!/usr/bin/env python
-import os
 import sys
-
-
-def main() -> None:
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ai_service.settings")
-    try:
-        from django.core.management import execute_from_command_line
-    except ImportError as exc:
-        raise ImportError("Couldn't import Django. Is it installed and on PYTHONPATH?") from exc
-    execute_from_command_line(sys.argv)
+from pathlib import Path
 
 
 if __name__ == "__main__":
+    repo_root = Path(__file__).resolve().parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from aai_api.manage import main
+
     main()
