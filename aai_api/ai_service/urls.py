@@ -1,8 +1,10 @@
-﻿from django.urls import path
+from django.urls import path
 
 from aai_api.api_adapters.task1 import RecommendationAdapterView
 from aai_api.api_adapters.task2 import QualityPredictAdapterView
 from aai_api.api_adapters.task3 import (
+    InteractionListAdapterView,
+    InteractionOverrideAdapterView,
     LifecycleModelActivateAdapterView,
     LifecycleModelListAdapterView,
     LifecycleModelRollbackAdapterView,
@@ -19,5 +21,7 @@ urlpatterns = [
     path("api/task3/models/upload/", LifecycleModelUploadAdapterView.as_view(), name="task3-model-upload"),
     path("api/task3/models/activate/", LifecycleModelActivateAdapterView.as_view(), name="task3-model-activate"),
     path("api/task3/models/rollback/", LifecycleModelRollbackAdapterView.as_view(), name="task3-model-rollback"),
+    path("api/task3/interactions/", InteractionListAdapterView.as_view(), name="task3-interaction-list"),
+    path("api/task3/interactions/<int:pk>/override/", InteractionOverrideAdapterView.as_view(), name="task3-interaction-override"),
     path("api/task4/explain/", ExplainAdapterView.as_view(), name="task4-explain"),
 ]

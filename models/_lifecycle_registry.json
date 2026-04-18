@@ -1,0 +1,30 @@
+{
+  "models": {
+    "produce-quality": {
+      "activation_history": [
+        {
+          "activated_at": "2026-04-18T22:24:14Z",
+          "model_version": "1.0.0",
+          "source": "local-setup"
+        }
+      ],
+      "active_version": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "activated_at": "2026-04-18T22:24:14Z",
+          "artifact_path": "artifacts/task2_fresh_rotten_efficientnetv2.pth",
+          "checksum": "ee876a3fe13789e375fb32b686436091cf70bcb92fec8d9c6a79283737cfd091",
+          "created_at": "2026-04-18T22:23:36Z",
+          "framework": "pytorch",
+          "manifest_path": "produce-quality/1.0.0/manifest.json",
+          "model_name": "produce-quality",
+          "model_version": "1.0.0",
+          "schema_version": "task2-quality-v1",
+          "source": "manifest-discovery",
+          "task_profile": "task2_quality"
+        }
+      }
+    }
+  },
+  "schema_version": "task3-lifecycle-v1"
+}
