@@ -28,8 +28,7 @@ import torch.nn as nn
 from PIL import Image, UnidentifiedImageError
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Subset
-from torchvision import datasets, models, transforms
-from torchvision.models import ResNet50_Weights
+from torchvision import datasets, transforms
 from torchvision.models import efficientnet_v2_s, EfficientNet_V2_S_Weights
 
 
@@ -532,7 +531,7 @@ def create_dataloaders(
 # ---------------------------------------------------------------------------
 
 class MultiTaskProduceNet(nn.Module):
-    """ResNet backbone with classification and quality regression heads."""
+    """EfficientNetV2-S backbone with classification and quality regression heads."""
 
     def __init__(self, backbone: nn.Module, feature_dim: int, num_classes: int) -> None:
         super().__init__()
@@ -561,12 +560,12 @@ class MultiTaskProduceNet(nn.Module):
 def build_model(
     num_classes: int, device: torch.device, use_pretrained: bool = True,
 ) -> nn.Module:
-    """Create transfer-learning multitask model with a ResNet-50 backbone."""
+    """Create transfer-learning multitask model with an EfficientNetV2-S backbone."""
     pretrained_loaded = False
 
     if use_pretrained:
         try:
-            efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT)
+            backbone = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT)
             pretrained_loaded = True
         except (URLError, RuntimeError, OSError) as exc:
             retry_error = exc
@@ -581,29 +580,30 @@ def build_model(
                     urllib.request.install_opener(
                         urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
                     )
-                    efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT)
+                    backbone = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.DEFAULT)
                     pretrained_loaded = True
-                    print("Loaded pretrained ResNet-50 weights after applying certifi SSL certificates.")
+                    print("Loaded pretrained EfficientNetV2-S weights after applying certifi SSL certificates.")
                 except (ImportError, URLError, RuntimeError, OSError) as cert_exc:
                     retry_error = cert_exc
 
             if not pretrained_loaded:
                 print(f"Warning: Could not download pretrained weights ({retry_error}). "
                       "Falling back to randomly initialized weights.")
-                backbone = models.resnet50(weights=None)
+                backbone = efficientnet_v2_s(weights=None)
     else:
-        backbone = models.resnet50(weights=None)
+        backbone = efficientnet_v2_s(weights=None)
 
     if pretrained_loaded:
-        # Freeze early layers; unfreeze layer3 + layer4 for fine-tuning.
+        # Freeze all layers; unfreeze the last 3 feature blocks for fine-tuning.
         for param in backbone.parameters():
             param.requires_grad = False
-        for module in [backbone.layer3, backbone.layer4]:
-            for param in module.parameters():
+        for block in backbone.features[-3:]:
+            for param in block.parameters():
                 param.requires_grad = True
 
-    feature_dim = backbone.fc.in_features
-    backbone.fc = nn.Identity()
+    # EfficientNetV2 uses backbone.classifier instead of backbone.fc.
+    feature_dim = backbone.classifier[1].in_features
+    backbone.classifier = nn.Identity()
     model = MultiTaskProduceNet(backbone=backbone, feature_dim=feature_dim, num_classes=num_classes)
     return model.to(device)
 
@@ -916,7 +916,7 @@ def main() -> None:
             "model_state_dict": model.state_dict(),
             "class_names": class_names,
             "image_size": cfg.image_size,
-            "architecture": "resnet50_multitask_transfer_learning",
+            "architecture": "efficientnetv2s_multitask_transfer_learning",
         }, cfg.save_model_path)
         print(f"Saved model weights to: {cfg.save_model_path}")
 
