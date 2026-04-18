@@ -211,6 +211,12 @@ def process_prediction(
     normalized_label = normalize_label(label)
     scores = validate_quality_scores(quality_scores)
     grade = assign_overall_grade(scores)
+
+    # Classification takes priority: rotten produce is always Grade C.
+    # The CNN is more reliable than the pixel proxy for freshness judgement.
+    if normalized_label == "rotten":
+        grade = "C"
+
     inventory_action = update_inventory_and_discount(grade)
 
     return {

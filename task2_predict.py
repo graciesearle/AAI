@@ -26,6 +26,7 @@ from task2_model import (
     _extract_checkpoint_state_dict,
     _list_dataset_images,
     build_model,
+    clamp,
     process_prediction,
     resolve_dataset_root,
     set_seed,
@@ -36,11 +37,66 @@ from task2_model import (
 # Single-image prediction
 # ---------------------------------------------------------------------------
 
+def _compute_quality_from_image(image: Image.Image) -> Dict[str, float]:
+    """Compute quality scores directly from image pixels (improved formula).
+
+    Uses HSV colour analysis with a balanced formula that works well
+    for both vibrant and pale produce. This bypasses the model's quality
+    head, avoiding the need for retraining when the formula changes.
+    """
+    import numpy as np
+
+    rgb = image.convert("RGB").resize((256, 256))
+    hsv = np.asarray(rgb.convert("HSV"), dtype=np.float32) / 255.0
+    hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+
+    mask = ((sat > 0.12) | (val < 0.92)) & (val > 0.08)
+    if float(np.mean(mask)) < 0.03:
+        mask = np.ones_like(mask, dtype=bool)
+
+    sat_pixels, val_pixels = sat[mask], val[mask]
+    mean_sat = float(np.mean(sat_pixels)) if sat_pixels.size else 0.0
+    mean_val = float(np.mean(val_pixels)) if val_pixels.size else 0.0
+    val_std = float(np.std(val_pixels)) if val_pixels.size else 0.0
+
+    brown_mask = mask & (hue >= 0.05) & (hue <= 0.14) & (sat >= 0.2) & (val <= 0.65)
+    brown_ratio = float(np.mean(brown_mask[mask])) if np.any(mask) else 0.0
+
+    area_ratio = float(np.mean(mask))
+    ys, xs = np.where(mask)
+    if ys.size > 0 and xs.size > 0:
+        bbox_ratio = float((ys.max() - ys.min() + 1) * (xs.max() - xs.min() + 1)) / float(mask.size)
+        fill_ratio = area_ratio / max(bbox_ratio, 1e-6)
+    else:
+        fill_ratio = 0.0
+
+    saturation_score = 100.0 * mean_sat
+    brightness_score = 100.0 * clamp(1.0 - abs(mean_val - 0.65) / 0.65, 0.0, 1.0)
+    freshness_score = 100.0 * (1.0 - brown_ratio)
+    colour = clamp(0.3 * saturation_score + 0.3 * brightness_score + 0.4 * freshness_score)
+
+    size = clamp(
+        0.8 * (100.0 * clamp((area_ratio - 0.08) / 0.52, 0.0, 1.0))
+        + 0.2 * (100.0 * clamp(fill_ratio, 0.0, 1.0))
+    )
+
+    uniformity_score = 100.0 * clamp(1.0 - min(val_std / 0.25, 1.0), 0.0, 1.0)
+    ripeness = clamp(
+        0.45 * colour + 0.30 * uniformity_score + 0.25 * freshness_score
+    )
+
+    return {
+        "colour": round(colour, 2),
+        "size": round(size, 2),
+        "ripeness": round(ripeness, 2),
+    }
+
+
 def predict_single_image(
     model: nn.Module, image_path: Path, class_names: List[str],
     image_size: int, device: torch.device,
 ) -> Tuple[str, float, Dict[str, float]]:
-    """Predict class label, confidence, and quality percentages for one image."""
+    """Predict class label via CNN, quality scores via direct pixel analysis."""
     preprocess = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
@@ -52,17 +108,13 @@ def predict_single_image(
 
     model.eval()
     with torch.no_grad():
-        logits, q_preds = model(tensor)
+        logits, _ = model(tensor)
         probs = torch.softmax(logits, dim=1)
         confidence, pred_idx = torch.max(probs, dim=1)
 
     label = class_names[pred_idx.item()]
-    q_np = torch.clamp(q_preds.squeeze(0), 0.0, 100.0).cpu().numpy()
-    return label, confidence.item() * 100.0, {
-        "colour": round(float(q_np[0]), 2),
-        "size": round(float(q_np[1]), 2),
-        "ripeness": round(float(q_np[2]), 2),
-    }
+    quality_scores = _compute_quality_from_image(image)
+    return label, confidence.item() * 100.0, quality_scores
 
 
 # ---------------------------------------------------------------------------
