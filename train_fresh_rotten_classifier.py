@@ -73,7 +73,7 @@ class RunConfig:
     seed: int = 42
     # Transfer learning must be enabled by default for Task 2 compliance.
     no_pretrained: bool = False
-    save_model_path: Path = Path("fresh_rotten_resnet50.pth")
+    save_model_path: Path = Path("fresh_rotten_resnet501.pth")
     save_plot_path: Path = Path("learning_curves.png")
     predict_image: Path | None = None
     # File-based Kaggle setup (replace placeholder values before first run).
@@ -95,7 +95,7 @@ CONFIG = RunConfig(
     num_workers=2,
     seed=42,
     no_pretrained=False,
-    save_model_path=Path("fresh_rotten_resnet50.pth"),
+    save_model_path=Path("fresh_rotten_resnet501.pth"),
     save_plot_path=Path("learning_curves.png"),
     predict_image=None,
     auto_download_from_kaggle=True,
@@ -165,14 +165,14 @@ def validate_quality_scores(
 
 
 def assign_overall_grade(scores: QualityScores) -> str:
-    """Assign an overall grade using fixed threshold rules."""
+    """Assign grade using strict thresholds: A>=85/90/80, C<65/70/60, else B."""
     if scores.colour < 65.0 or scores.size < 70.0 or scores.ripeness < 60.0:
         return "C"
 
-    if scores.colour < 75.0 or scores.size < 80.0 or scores.ripeness < 70.0:
-        return "B"
+    if scores.colour >= 85.0 and scores.size >= 90.0 and scores.ripeness >= 80.0:
+        return "A"
 
-    return "A"
+    return "B"
 
 
 def update_inventory_and_discount(grade: str) -> Dict[str, object]:
@@ -881,6 +881,111 @@ def build_model(
     return model.to(device)
 
 
+def _extract_checkpoint_state_dict(checkpoint: object) -> Dict[str, torch.Tensor]:
+    """Normalize common checkpoint formats into current model key names."""
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Checkpoint must be a dictionary.")
+
+    if "model_state_dict" in checkpoint and isinstance(checkpoint["model_state_dict"], dict):
+        raw_state_dict = checkpoint["model_state_dict"]
+    elif "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], dict):
+        raw_state_dict = checkpoint["state_dict"]
+    else:
+        raw_state_dict = checkpoint
+
+    if not isinstance(raw_state_dict, dict) or not raw_state_dict:
+        raise ValueError("Checkpoint does not contain a usable state dict.")
+    if not all(torch.is_tensor(value) for value in raw_state_dict.values()):
+        raise ValueError("Checkpoint state dict values must be tensors.")
+
+    normalized_state_dict: Dict[str, torch.Tensor] = {}
+    for key, value in raw_state_dict.items():
+        clean_key = key[len("module."):] if key.startswith("module.") else key
+
+        if clean_key.startswith(("backbone.", "classifier_head.", "quality_head.")):
+            normalized_state_dict[clean_key] = value
+            continue
+
+        if clean_key.startswith("fc."):
+            suffix = clean_key[len("fc."):]
+            if suffix.startswith("0."):
+                suffix = suffix[len("0."):]
+            elif suffix.startswith("1."):
+                suffix = suffix[len("1."):]
+            if suffix in {"weight", "bias"}:
+                normalized_state_dict[f"classifier_head.1.{suffix}"] = value
+            continue
+
+        normalized_state_dict[f"backbone.{clean_key}"] = value
+
+    return normalized_state_dict
+
+
+def _remap_classifier_to_dataset_classes(
+    state_dict: Dict[str, torch.Tensor],
+    checkpoint_class_names: List[str] | None,
+    target_class_names: List[str],
+) -> Dict[str, torch.Tensor]:
+    """Align classifier rows by class name without changing model class count."""
+    weight_key = "classifier_head.1.weight"
+    bias_key = "classifier_head.1.bias"
+
+    if checkpoint_class_names is None:
+        return state_dict
+    if weight_key not in state_dict or bias_key not in state_dict:
+        return state_dict
+
+    src_weight = state_dict[weight_key]
+    src_bias = state_dict[bias_key]
+    if src_weight.ndim != 2 or src_bias.ndim != 1:
+        return state_dict
+
+    if len(checkpoint_class_names) != src_weight.shape[0] or len(checkpoint_class_names) != src_bias.shape[0]:
+        raise RuntimeError(
+            "Checkpoint class_names does not match classifier tensor sizes."
+        )
+
+    class_to_index = {name: idx for idx, name in enumerate(checkpoint_class_names)}
+    missing_classes = [name for name in target_class_names if name not in class_to_index]
+    if missing_classes:
+        missing_preview = ", ".join(missing_classes[:6])
+        raise RuntimeError(
+            "Checkpoint is missing one or more dataset classes needed for remapping: "
+            f"{missing_preview}."
+        )
+
+    remapped_weight = torch.empty(
+        (len(target_class_names), src_weight.shape[1]),
+        dtype=src_weight.dtype,
+        device=src_weight.device,
+    )
+    remapped_bias = torch.empty(
+        (len(target_class_names),),
+        dtype=src_bias.dtype,
+        device=src_bias.device,
+    )
+
+    for target_index, class_name in enumerate(target_class_names):
+        source_index = class_to_index[class_name]
+        remapped_weight[target_index] = src_weight[source_index]
+        remapped_bias[target_index] = src_bias[source_index]
+
+    remapped_state = dict(state_dict)
+    remapped_state[weight_key] = remapped_weight
+    remapped_state[bias_key] = remapped_bias
+    return remapped_state
+
+
+def _list_dataset_images(dataset_root: Path) -> List[Path]:
+    """Return all supported image files under dataset_root."""
+    image_suffixes = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+    return [
+        file_path
+        for file_path in dataset_root.rglob("*")
+        if file_path.is_file() and file_path.suffix.lower() in image_suffixes
+    ]
+
+
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
@@ -1147,83 +1252,165 @@ def main() -> None:
         params=[p for p in model.parameters() if p.requires_grad],
         lr=cfg.learning_rate,
     )
-
-    model, history = train_model(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        cls_criterion=cls_criterion,
-        quality_criterion=quality_criterion,
-        optimizer=optimizer,
-        quality_loss_weight=cfg.quality_loss_weight,
-        device=device,
-        num_epochs=cfg.epochs,
-        patience=cfg.patience,
+    trained_now = False
+    has_quality_head_weights = True
+    history = History(
+        train_total_loss=[],
+        val_total_loss=[],
+        train_cls_loss=[],
+        val_cls_loss=[],
+        train_quality_loss=[],
+        val_quality_loss=[],
+        train_acc=[],
+        val_acc=[],
     )
 
-    train_total, train_acc, train_cls, train_quality = evaluate(
-        model=model,
-        loader=train_loader,
-        cls_criterion=cls_criterion,
-        quality_criterion=quality_criterion,
-        quality_loss_weight=cfg.quality_loss_weight,
-        device=device,
-    )
-    val_total, val_acc, val_cls, val_quality = evaluate(
-        model=model,
-        loader=val_loader,
-        cls_criterion=cls_criterion,
-        quality_criterion=quality_criterion,
-        quality_loss_weight=cfg.quality_loss_weight,
-        device=device,
-    )
+    if cfg.save_model_path.exists():
+        checkpoint = torch.load(cfg.save_model_path, map_location=device)
+        checkpoint_class_names: List[str] | None = None
+        if isinstance(checkpoint, dict):
+            raw_class_names = checkpoint.get("class_names")
+            if isinstance(raw_class_names, list) and raw_class_names and all(
+                isinstance(name, str) for name in raw_class_names
+            ):
+                checkpoint_class_names = raw_class_names
 
-    print("\nFinal Evaluation Metrics")
-    print(f"Train Total Loss: {train_total:.4f}")
-    print(f"Train Classification Loss: {train_cls:.4f}")
-    print(f"Train Quality Loss: {train_quality:.4f}")
-    print(f"Train Accuracy: {train_acc:.2f}%")
-    print(f"Validation Total Loss: {val_total:.4f}")
-    print(f"Validation Classification Loss: {val_cls:.4f}")
-    print(f"Validation Quality Loss: {val_quality:.4f}")
-    print(f"Validation Accuracy: {val_acc:.2f}%")
+        checkpoint_state_dict = _extract_checkpoint_state_dict(checkpoint)
+        checkpoint_state_dict = _remap_classifier_to_dataset_classes(
+            state_dict=checkpoint_state_dict,
+            checkpoint_class_names=checkpoint_class_names,
+            target_class_names=class_names,
+        )
 
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "class_names": class_names,
-            "image_size": cfg.image_size,
-            "architecture": "resnet50_multitask_transfer_learning",
-            "quality_head": "deep_regression_head",
-        },
-        cfg.save_model_path,
-    )
-    print(f"Saved model weights to: {cfg.save_model_path}")
+        try:
+            incompatible = model.load_state_dict(checkpoint_state_dict, strict=False)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Checkpoint could not be loaded into the current dataset class layout. "
+                "If this checkpoint uses different classes, retrain a new model."
+            ) from exc
 
-    plot_learning_curves(history=history, save_path=cfg.save_plot_path)
-    print(f"Saved learning curves to: {cfg.save_plot_path}")
+        disallowed_missing = [
+            key for key in incompatible.missing_keys if not key.startswith("quality_head.")
+        ]
+        if disallowed_missing or incompatible.unexpected_keys:
+            missing_preview = ", ".join(disallowed_missing[:6]) or "none"
+            unexpected_preview = ", ".join(incompatible.unexpected_keys[:6]) or "none"
+            raise RuntimeError(
+                "Checkpoint is incompatible with the current model. "
+                f"Missing keys: {missing_preview}. Unexpected keys: {unexpected_preview}."
+            )
 
-    if cfg.predict_image is not None:
-        label, confidence_pct, quality_scores = predict_single_image(
+        has_quality_head_weights = not any(
+            key.startswith("quality_head.") for key in incompatible.missing_keys
+        )
+        print(f"Loaded existing model from: {cfg.save_model_path}")
+        if not has_quality_head_weights:
+            print(
+                "Checkpoint has no trained quality head. "
+                "Using image-based fallback quality scoring for post-processing."
+            )
+    else:
+        print("No existing model checkpoint found. Training from scratch.")
+        model, history = train_model(
             model=model,
-            image_path=cfg.predict_image,
-            class_names=class_names,
-            image_size=cfg.image_size,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            cls_criterion=cls_criterion,
+            quality_criterion=quality_criterion,
+            optimizer=optimizer,
+            quality_loss_weight=cfg.quality_loss_weight,
+            device=device,
+            num_epochs=cfg.epochs,
+            patience=cfg.patience,
+        )
+        trained_now = True
+
+    if trained_now:
+        train_total, train_acc, train_cls, train_quality = evaluate(
+            model=model,
+            loader=train_loader,
+            cls_criterion=cls_criterion,
+            quality_criterion=quality_criterion,
+            quality_loss_weight=cfg.quality_loss_weight,
             device=device,
         )
+        val_total, val_acc, val_cls, val_quality = evaluate(
+            model=model,
+            loader=val_loader,
+            cls_criterion=cls_criterion,
+            quality_criterion=quality_criterion,
+            quality_loss_weight=cfg.quality_loss_weight,
+            device=device,
+        )
+
+        print("\nFinal Evaluation Metrics")
+        print(f"Train Total Loss: {train_total:.4f}")
+        print(f"Train Classification Loss: {train_cls:.4f}")
+        print(f"Train Quality Loss: {train_quality:.4f}")
+        print(f"Train Accuracy: {train_acc:.2f}%")
+        print(f"Validation Total Loss: {val_total:.4f}")
+        print(f"Validation Classification Loss: {val_cls:.4f}")
+        print(f"Validation Quality Loss: {val_quality:.4f}")
+        print(f"Validation Accuracy: {val_acc:.2f}%")
+
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "class_names": class_names,
+                "image_size": cfg.image_size,
+                "architecture": "resnet50_multitask_transfer_learning",
+                "quality_head": "deep_regression_head",
+            },
+            cfg.save_model_path,
+        )
+        print(f"Saved model weights to: {cfg.save_model_path}")
+
+        plot_learning_curves(history=history, save_path=cfg.save_plot_path)
+        print(f"Saved learning curves to: {cfg.save_plot_path}")
+    else:
+        print("Skipped full evaluation, saving, and plotting because training was not run.")
+
+    prediction_image = cfg.predict_image
+    if prediction_image is None:
+        dataset_images = _list_dataset_images(dataset_root)
+        if not dataset_images:
+            raise FileNotFoundError(
+                f"No supported image files found for prediction in: {dataset_root}"
+            )
+        prediction_image = random.choice(dataset_images)
+        print(f"Selected random dataset image for prediction: {prediction_image}")
+
+    if not prediction_image.exists() or not prediction_image.is_file():
+        raise FileNotFoundError(f"Prediction image not found: {prediction_image}")
+
+    label, confidence_pct, quality_scores = predict_single_image(
+        model=model,
+        image_path=prediction_image,
+        class_names=class_names,
+        image_size=cfg.image_size,
+        device=device,
+    )
+    if has_quality_head_weights:
         result = process_prediction(
             label=label,
             confidence=confidence_pct / 100.0,
             quality_scores=quality_scores,
         )
-
-        print(
-            f"Prediction for '{cfg.predict_image}': {label} "
-            f"(confidence: {confidence_pct:.2f}%)"
+    else:
+        result = process_prediction(
+            label=label,
+            confidence=confidence_pct / 100.0,
+            image_path=prediction_image,
         )
-        print(f"Quality Scores: {result['quality_scores']}")
-        print(f"Overall Grade: {result['overall_grade']}")
-        print(f"Inventory Action: {result['inventory_action']}")
+
+    print(
+        f"Prediction for '{prediction_image}': {label} "
+        f"(confidence: {confidence_pct:.2f}%)"
+    )
+    print(f"Quality Scores: {result['quality_scores']}")
+    print(f"Overall Grade: {result['overall_grade']}")
+    print(f"Inventory Action: {result['inventory_action']}")
 
 
 if __name__ == "__main__":
