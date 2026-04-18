@@ -952,8 +952,12 @@ def build_model(
         backbone = models.resnet50(weights=None)
 
     if pretrained_loaded:
+        # Freeze early layers but unfreeze layer3 + layer4 for fine-tuning.
         for param in backbone.parameters():
             param.requires_grad = False
+        for module in [backbone.layer3, backbone.layer4]:
+            for param in module.parameters():
+                param.requires_grad = True
 
     feature_dim = backbone.fc.in_features
     backbone.fc = nn.Identity()
@@ -1595,9 +1599,16 @@ def main() -> None:
     )
     quality_criterion = nn.SmoothL1Loss()
 
+    # Differential learning rates: backbone fine-tuned layers get lower LR.
+    backbone_params = [p for n, p in model.named_parameters()
+                       if p.requires_grad and "backbone" in n]
+    head_params = [p for n, p in model.named_parameters()
+                   if p.requires_grad and "backbone" not in n]
     optimizer = Adam(
-        params=[p for p in model.parameters() if p.requires_grad],
-        lr=cfg.learning_rate,
+        [
+            {"params": backbone_params, "lr": cfg.learning_rate * 0.1},
+            {"params": head_params, "lr": cfg.learning_rate},
+        ],
         weight_decay=cfg.weight_decay,
     )
     trained_now = False
