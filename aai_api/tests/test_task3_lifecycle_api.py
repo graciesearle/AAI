@@ -3,15 +3,26 @@ from pathlib import Path
 import tempfile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from PIL import Image
+from rest_framework.authtoken.models import Token
+from rest_framework.test import APIClient
 import torch
 
-from task2_3_4.task2_quality.model_inference import _build_model
+from task2_3_4.task2_quality.task2_model import build_model
+
+
+User = get_user_model()
 
 
 class Task3LifecycleApiTests(TestCase):
     def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="ai_engineer", password="SecurePass123")
+        self.token = Token.objects.create(user=self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token.key}")
+
         self.temp_dir = tempfile.TemporaryDirectory()
         self.override = override_settings(MODEL_ROOT=Path(self.temp_dir.name))
         self.override.enable()
@@ -22,7 +33,7 @@ class Task3LifecycleApiTests(TestCase):
 
     def _upload_model(self, version: str, artifact_name: str = "model.pth", valid_checkpoint: bool = False):
         if valid_checkpoint:
-            model = _build_model(num_classes=2)
+            model = build_model(num_classes=2, device=torch.device("cpu"), use_pretrained=False)
             checkpoint = {
                 "model_state_dict": model.state_dict(),
                 "class_names": ["fresh", "rotten"],
@@ -84,6 +95,44 @@ class Task3LifecycleApiTests(TestCase):
         )
         self.assertEqual(activate.status_code, 200)
         self.assertEqual(activate.data["model_version"], "2.0.0")
+
+    def test_lifecycle_mutation_endpoints_require_authentication(self):
+        anon = APIClient()
+
+        upload = anon.post(
+            "/api/task3/models/upload/",
+            {
+                "model_name": "produce-quality",
+                "model_version": "4.0.0",
+                "framework": "pytorch",
+                "artifact": SimpleUploadedFile(
+                    name="model.pth",
+                    content=b"weights",
+                    content_type="application/octet-stream",
+                ),
+            },
+            format="multipart",
+        )
+        self.assertEqual(upload.status_code, 401)
+
+        activate = anon.post(
+            "/api/task3/models/activate/",
+            {
+                "model_name": "produce-quality",
+                "model_version": "4.0.0",
+            },
+            format="json",
+        )
+        self.assertEqual(activate.status_code, 401)
+
+        rollback = anon.post(
+            "/api/task3/models/rollback/",
+            {
+                "model_name": "produce-quality",
+            },
+            format="json",
+        )
+        self.assertEqual(rollback.status_code, 401)
 
     def test_rollback_switches_to_previous_version(self):
         self.assertEqual(self._upload_model("2.0.0").status_code, 201)

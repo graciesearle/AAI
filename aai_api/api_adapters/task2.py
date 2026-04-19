@@ -23,7 +23,7 @@ class QualityPredictAdapterView(APIView):
         serializer.is_valid(raise_exception=True)
 
         cfg = get_service_config()
-        model_name = cfg.default_model_name
+        model_name = serializer.validated_data.get("model_name") or cfg.default_model_name
         requested_model_version = serializer.validated_data.get("model_version")
         model_version = (
             requested_model_version
@@ -73,6 +73,7 @@ class QualityPredictAdapterView(APIView):
                 "confidence": confidence_pct,
                 "predicted_class": predicted_class,
                 "overall_grade": overall_grade,
+                "model_name_used": model_name,
                 "model_version_used": model_version,
                 "explanation_payload": payload.get("explanation_payload", {}),
                 "inventory_action": payload.get("inventory_action", {}),

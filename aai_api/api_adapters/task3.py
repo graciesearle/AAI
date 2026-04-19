@@ -123,8 +123,8 @@ def _build_manifest_from_upload(*, payload: dict[str, Any], artifact_path: str, 
 # ---------------------------------------------------------------------------
 
 class LifecycleModelListAdapterView(APIView):
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         cfg = get_service_config()
@@ -135,8 +135,8 @@ class LifecycleModelListAdapterView(APIView):
 
 
 class LifecycleModelUploadAdapterView(APIView):
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = LifecycleModelUploadSerializer(data=request.data)
@@ -189,8 +189,8 @@ class LifecycleModelUploadAdapterView(APIView):
 
 
 class LifecycleModelActivateAdapterView(APIView):
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = LifecycleModelActivateSerializer(data=request.data)
@@ -214,8 +214,8 @@ class LifecycleModelActivateAdapterView(APIView):
 
 
 class LifecycleModelRollbackAdapterView(APIView):
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = LifecycleModelRollbackSerializer(data=request.data)

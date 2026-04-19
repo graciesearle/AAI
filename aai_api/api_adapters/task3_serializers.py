@@ -122,3 +122,20 @@ class ProducerOverrideSerializer(serializers.Serializer):
         max_length=4, required=False, allow_blank=True, default="",
         help_text="The grade the producer believes is correct (A, B, or C). Only required when producer_accepted is False."
     )
+
+    def validate(self, attrs):
+        producer_accepted = attrs["producer_accepted"]
+        override_grade = str(attrs.get("override_grade", "")).strip()
+
+        if producer_accepted and override_grade:
+            raise serializers.ValidationError(
+                {"override_grade": "override_grade must be empty when producer_accepted is True."}
+            )
+
+        if not producer_accepted and not override_grade:
+            raise serializers.ValidationError(
+                {"override_grade": "override_grade is required when producer_accepted is False."}
+            )
+
+        attrs["override_grade"] = override_grade
+        return attrs
