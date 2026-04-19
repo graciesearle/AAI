@@ -10,14 +10,7 @@ The API endpoint is handled in `aai_api/api_adapters/task1.py`.
 ## Quick Start: Move Your Local AI Code Here
 
 1. Copy your local Task 1 python file(s) into this folder.
-2. Keep your heavy logic in `runtime.py` (or import your module from there).
-3. Ensure `runtime.py` exposes:
-
-```python
-build_recommendations(model_name, model_version, recent_items, manifest)
-```
-
-4. Return a dict that matches `RecommendationResponseSerializer` in `serializers.py`.
+2. If it needs to hook up to desd, just call functions from you .py file in runtime.
 
 ## How It Connects to API
 
@@ -34,13 +27,6 @@ If you ship model metadata/artifacts, place them under model root with:
 - `<model_root>/recommendation-engine/<version>/manifest.json`
 
 If missing, Task 1 still works with runtime defaults.
-
-## Minimal Update Checklist
-
-- [ ] Runtime function signature kept stable.
-- [ ] Output shape matches serializer.
-- [ ] Any new dependencies added to `aai_api/requirements.txt`.
-- [ ] Run tests from repo root:
 
 ```bash
 pytest aai_api/tests/test_smoke_api.py -q
