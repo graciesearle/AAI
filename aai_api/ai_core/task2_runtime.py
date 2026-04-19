@@ -93,9 +93,13 @@ def run_quality_inference(*, image_file, checkpoint_path):
     # were derived. We inject these explanatory strings directly into the
     # explanation_payload here.
     grade = result["overall_grade"]
+    label = result["normalized_label"]
     
     if grade == "C":
-        grade_derivation = "Assigned Grade C because one or more quality metrics fell below threshold (Colour < 65, Size < 70, or Ripeness < 60)."
+        if label == "rotten":
+            grade_derivation = "Assigned Grade C because the classification model detected severe defects/rot."
+        else:
+            grade_derivation = "Assigned Grade C because one or more quality metrics fell below threshold (Colour < 65, Size < 70, or Ripeness < 60)."
         rec_derivation = "Grade C indicates immediate risk of spoilage. Fast sale or heavy markdown recommended."
     elif grade == "B":
         grade_derivation = "Assigned Grade B because one or more quality metrics fell below the top-tier thresholds but remained above critical levels."

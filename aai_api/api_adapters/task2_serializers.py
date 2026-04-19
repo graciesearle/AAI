@@ -28,3 +28,4 @@ class QualityPredictResponseSerializer(serializers.Serializer):
     transparency_refs = serializers.ListField(child=serializers.CharField(), required=False)
     model_version_used = serializers.CharField(required=False)
     inventory_action = serializers.DictField(required=False)  # Contains discount logic
+    latency_ms = serializers.FloatField(required=False, default=0.0)

@@ -1,30 +1,4 @@
-﻿# Advanced AI Repository (Handoff-Ready)
-
-This repository is organized by delivery responsibility so Task 1, Task 2/3/4, and API integration work can be handed off independently.
-
-## Top-Level Layout
-
-- `aai_api/`: Django/DRF service shell, container files, health/config, integration tests.
-- `task1/`: Task 1 recommendation implementation.
-- `task2_3_4/`: Task 2 quality, Task 3 lifecycle, Task 4 XAI, and Task 2 raw/training assets.
-
-## Why Task 2/3/4 Are Grouped
-
-Assessment guidance in `task2_3_4/reference/AAI_DOCS/faqs.md` states the AI repository may be split as:
-
-- One area for Task 1
-- One area for Tasks 2, 3, and 4
-
-This structure follows that requirement and keeps CV + lifecycle + XAI together.
-
-## Task 2 Implementation Status
-
-Task 2 post-processing logic has been intentionally reset to a blank slate for the next implementation pass.
-
-- Current runtime baseline: `task2_3_4/task2_quality/runtime.py`
-- Next implementation owner can add quality scoring and grading logic there (or in helper modules it imports).
-
-## API Endpoints
+﻿# Advanced AI Repository 
 
 - `GET /api/health/`
 - `POST /api/task1/recommend/`
@@ -42,6 +16,15 @@ python manage.py runserver
 ```
 
 Django settings module is now namespaced as `aai_api.ai_service.settings` through `manage.py`.
+
+Use venv and then cd aai_api\
+python manage.py runserver 8001
+Instead of docker so we don't need to build it for DESD (quick development)
+
+Because of this we need to change the DESD env.
+ and add this line to the bottom:
+`AI_INFERENCE_BASE_URL=http://host.docker.internal:8001`
+
 
 ## Docker
 

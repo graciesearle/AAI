@@ -165,8 +165,11 @@ def validate_quality_scores(
     )
 
 
-def assign_overall_grade(scores: QualityScores) -> str:
-    """Assign grade using strict thresholds: A>=85/90/80, C<65/70/60, else B."""
+def assign_overall_grade(scores: QualityScores, is_rotten: bool = False) -> str:
+    """Assign grade using strict thresholds: A>=85/90/80, C<65/70/60, else B. ROTTEN forces C."""
+    if is_rotten:
+        return "C"
+    
     if scores.colour < 65.0 or scores.size < 70.0 or scores.ripeness < 60.0:
         return "C"
     if scores.colour >= 75.0 and scores.size >= 80.0 and scores.ripeness >= 70.0:
@@ -210,7 +213,9 @@ def process_prediction(
     """End-to-end post-processing for a single deep-model prediction."""
     normalized_label = normalize_label(label)
     scores = validate_quality_scores(quality_scores)
-    grade = assign_overall_grade(scores)
+    is_rotten = (normalized_label == "rotten")
+    
+    grade = assign_overall_grade(scores, is_rotten=is_rotten)
     inventory_action = update_inventory_and_discount(grade)
 
     return {

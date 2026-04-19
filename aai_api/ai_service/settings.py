@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 import os
 
 
@@ -13,7 +13,7 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-only-change-me")
 DEBUG = str(env("DJANGO_DEBUG", "1")).lower() in {"1", "true", "yes"}
 ALLOWED_HOSTS = [
     host.strip()
-    for host in str(env("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,0.0.0.0,ai-service")).split(",")
+    for host in str(env("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,0.0.0.0,ai-service,host.docker.internal")).split(",")
 ]
 
 INSTALLED_APPS = [
@@ -86,3 +86,4 @@ MODEL_ROOT = Path(str(env("MODEL_ROOT", str(REPO_ROOT / "models"))))
 DEFAULT_MODEL_NAME = str(env("DEFAULT_MODEL_NAME", "produce-quality"))
 DEFAULT_MODEL_VERSION = str(env("DEFAULT_MODEL_VERSION", "1.0.0"))
 DEFAULT_TASK_PROFILE = str(env("DEFAULT_TASK_PROFILE", "task2_quality"))
+VERBOSE_INFERENCE_LOGGING = str(env("VERBOSE_INFERENCE_LOGGING", "1")).lower() in {"1", "true", "yes"}

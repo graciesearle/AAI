@@ -1,3 +1,4 @@
+import time
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +17,8 @@ from aai_api.api_adapters.task2_serializers import (
 
 class QualityPredictAdapterView(APIView):
     def post(self, request):
+        start_time = time.time()
+        
         serializer = QualityPredictRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -45,6 +48,17 @@ class QualityPredictAdapterView(APIView):
                 checkpoint_path=checkpoint_path,
             )
             
+            latency_ms = (time.time() - start_time) * 1000.0
+            
+            if cfg.verbose_inference_logging:
+                print(f"\n[AAI PIPELINE LOG] task2 quality inference")
+                print(f"  ├─ Producer    : {serializer.validated_data['producer_id']}")
+                print(f"  ├─ Model Name  : {model_name}")
+                print(f"  ├─ Version     : {model_version}")
+                print(f"  ├─ Checkpoint  : {checkpoint_path}")
+                print(f"  ├─ Predicted   : Grade {payload['overall_grade']} ({payload['normalized_label']})")
+                print(f"  └─ Latency     : {latency_ms:.2f} ms\n")
+            
             # process_prediction returns 'input_confidence' (normalised 0-1);
             # DESD expects 'confidence' as a percentage 0-100.
             confidence_pct = round(payload["input_confidence"] * 100.0, 2)
@@ -61,7 +75,8 @@ class QualityPredictAdapterView(APIView):
                 "overall_grade": overall_grade,
                 "model_version_used": model_version,
                 "explanation_payload": payload.get("explanation_payload", {}),
-                "inventory_action": payload.get("inventory_action", {})
+                "inventory_action": payload.get("inventory_action", {}),
+                "latency_ms": latency_ms,
             }
 
             # Academically crucial: Recording the interaction telemetry
