@@ -2,6 +2,9 @@ FruitAndVegetableDataset/
 __pycache__/
 __pycache__/*
 .venv/
+venv/
 fruit-and-vegetable-disease-healthy-vs-rotten.zip
 .env
+.env.local
+xai_test_outputs/
 .DS_Store

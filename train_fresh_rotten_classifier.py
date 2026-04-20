@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
 from urllib.error import URLError
+from dotenv import load_dotenv
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,6 +35,7 @@ from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, models, transforms
 from torchvision.models import ResNet50_Weights
 
+load_dotenv(".env.local")
 
 @dataclass
 class History:
@@ -100,8 +102,8 @@ CONFIG = RunConfig(
     predict_image=None,
     auto_download_from_kaggle=True,
     kaggle_dataset="muhammad0subhan/fruit-and-vegetable-disease-healthy-vs-rotten",
-    kaggle_username="YOUR_KAGGLE_USERNAME",
-    kaggle_key="YOUR_KAGGLE_KEY",
+    kaggle_username=os.getenv("KAGGLE_USERNAME", ""),
+    kaggle_key=os.getenv("KAGGLE_KEY", ""),
     kaggle_download_dir=Path("."),
 )
 
