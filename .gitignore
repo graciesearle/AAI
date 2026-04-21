@@ -1,3 +1,11 @@
+FruitAndVegetableDataset/
+__pycache__/
+__pycache__/*
+fruit-and-vegetable-disease-healthy-vs-rotten.zip
+.env
+.env.local
+xai_test_outputs/
+.DS_Store
 # Local folder - for storing anything that is generated/used locally such as for testing
 local/
 # Data folder - for storing any datasets, trained models, or other large files that should not be checked into version control

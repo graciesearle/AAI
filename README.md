@@ -1,4 +1,4 @@
-# AAI
+# AAI Task 2 - Deep Learning Produce Quality Pipeline
 
 This repo is organised as one API service plus task modules for the case study.
 
