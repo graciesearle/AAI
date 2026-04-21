@@ -11,6 +11,7 @@ class ServiceConfig:
     default_model_version: str
     default_task_profile: str
     verbose_inference_logging: bool
+    ai_device: str
 
 
 def get_service_config() -> ServiceConfig:
@@ -20,4 +21,5 @@ def get_service_config() -> ServiceConfig:
         default_model_version=settings.DEFAULT_MODEL_VERSION,
         default_task_profile=settings.DEFAULT_TASK_PROFILE,
         verbose_inference_logging=settings.VERBOSE_INFERENCE_LOGGING,
+        ai_device=settings.AI_DEVICE,
     )

@@ -1,6 +1,6 @@
 from pathlib import Path
 import os
-
+import torch
 
 def env(name: str, default: str | None = None) -> str | None:
     return os.environ.get(name, default)
@@ -88,3 +88,6 @@ DEFAULT_MODEL_NAME = str(env("DEFAULT_MODEL_NAME", "produce-quality"))
 DEFAULT_MODEL_VERSION = str(env("DEFAULT_MODEL_VERSION", "1.0.0"))
 DEFAULT_TASK_PROFILE = str(env("DEFAULT_TASK_PROFILE", "task2_quality"))
 VERBOSE_INFERENCE_LOGGING = str(env("VERBOSE_INFERENCE_LOGGING", "1")).lower() in {"1", "true", "yes"}
+
+# Default to cuda:0 but allow override via environment variable
+AI_DEVICE = env("AI_DEVICE", "cuda:0" if torch.cuda.is_available() else "cpu")

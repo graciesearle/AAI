@@ -35,6 +35,7 @@ class ExplainAdapterView(APIView):
                 model_name=model_name,
                 model_version=model_version,
                 manifest=manifest,
+                device=cfg.ai_device
             )
             output = ExplainResponseSerializer(payload)
             return Response(output.data, status=status.HTTP_200_OK)
