@@ -1,29 +1,16 @@
-﻿import hashlib
+import hashlib
 import json
-from io import BytesIO
 from pathlib import Path
 import tempfile
 
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
-from PIL import Image
 import torch
 
-from task2_3_4.task2_quality.model_inference import _build_model
+from task2_3_4.task2_quality.task2_model import build_model as _build_model
+from .test_utils import make_uploaded_png
 
 
 class Task2QualityContractTests(TestCase):
-    def _make_image(self):
-        image_data = BytesIO()
-        image = Image.new("RGB", (24, 24), color=(210, 90, 40))
-        image.save(image_data, format="PNG")
-        image_data.seek(0)
-        return SimpleUploadedFile(
-            name="sample.png",
-            content=image_data.read(),
-            content_type="image/png",
-        )
-
     def _write_model_bundle(self, *, model_root: Path, model_name: str, model_version: str, valid: bool):
         bundle_root = model_root / model_name / model_version
         artifacts_root = bundle_root / "artifacts"
@@ -31,7 +18,7 @@ class Task2QualityContractTests(TestCase):
 
         artifact_path = artifacts_root / "model.pth"
         if valid:
-            model = _build_model(num_classes=2)
+            model = _build_model(num_classes=2, device="cpu")
             checkpoint = {
                 "model_state_dict": model.state_dict(),
                 "class_names": ["fresh", "rotten"],
@@ -104,7 +91,7 @@ class Task2QualityContractTests(TestCase):
                     "/api/task2/predict/",
                     {
                         "producer_id": 1,
-                        "image": self._make_image(),
+                        "image": make_uploaded_png(color=(210, 90, 40)),
                     },
                     format="multipart",
                 )
@@ -126,7 +113,7 @@ class Task2QualityContractTests(TestCase):
             "/api/task2/predict/",
             {
                 "producer_id": 1,
-                "image": self._make_image(),
+                "image": make_uploaded_png(color=(210, 90, 40)),
             },
             format="multipart",
         )
@@ -155,7 +142,7 @@ class Task2QualityContractTests(TestCase):
                     "/api/task2/predict/",
                     {
                         "producer_id": 1,
-                        "image": self._make_image(),
+                        "image": make_uploaded_png(color=(210, 90, 40)),
                     },
                     format="multipart",
                 )

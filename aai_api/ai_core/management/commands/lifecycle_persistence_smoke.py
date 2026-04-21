@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
@@ -10,18 +8,7 @@ from django.core.management.base import BaseCommand, CommandError
 from aai_api.ai_core.config import get_service_config
 from aai_api.ai_core.lifecycle import list_model_versions, register_model_version
 from aai_api.ai_core.manifest import ManifestError, load_manifest
-
-
-def _utc_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from aai_api.ai_core.utils import sha256_file, utc_iso_now
 
 
 class Command(BaseCommand):
@@ -84,10 +71,10 @@ class Command(BaseCommand):
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         if not artifact_path.exists():
-            payload = f"persistence-smoke|{model_name}|{model_version}|{_utc_iso()}".encode("utf-8")
+            payload = f"persistence-smoke|{model_name}|{model_version}|{utc_iso_now()}".encode("utf-8")
             artifact_path.write_bytes(payload)
 
-        checksum = _sha256(artifact_path)
+        checksum = sha256_file(artifact_path)
 
         manifest = {
             "model_name": model_name,
@@ -117,7 +104,7 @@ class Command(BaseCommand):
             "metrics": {
                 "smoke": True,
             },
-            "created_at": _utc_iso(),
+            "created_at": utc_iso_now(),
         }
 
         manifest_path = bundle_root / "manifest.json"

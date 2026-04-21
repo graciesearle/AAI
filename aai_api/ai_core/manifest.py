@@ -1,7 +1,8 @@
 import json
-import hashlib
 from pathlib import Path
 from typing import Any
+
+from aai_api.ai_core.utils import sha256_file
 
 
 REQUIRED_MANIFEST_KEYS = {
@@ -35,14 +36,6 @@ def get_manifest_path(model_root: Path, model_name: str, model_version: str) -> 
 
 def get_bundle_root(model_root: Path, model_name: str, model_version: str) -> Path:
     return model_root / model_name / model_version
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _validate_artifacts(
@@ -86,7 +79,7 @@ def _validate_artifacts(
         if not checksum:
             raise ManifestError(f"Manifest artifact at index {index} has an empty checksum")
 
-        actual_checksum = _sha256(artifact_path)
+        actual_checksum = sha256_file(artifact_path)
         if actual_checksum != checksum:
             raise ManifestError(
                 "Manifest artifact checksum mismatch for "

@@ -15,9 +15,7 @@ requirement from the case study.
 """
 from __future__ import annotations
 
-import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +35,7 @@ from aai_api.ai_core.lifecycle import (
 )
 from aai_api.ai_core.manifest import ManifestError, load_manifest
 from aai_api.ai_core.models import InferenceLog
+from aai_api.ai_core.utils import sha256_file, utc_iso_now
 from aai_api.api_adapters.task3_serializers import (
     InferenceLogSerializer,
     LifecycleModelActivateSerializer,
@@ -45,18 +44,6 @@ from aai_api.api_adapters.task3_serializers import (
     LifecycleModelUploadSerializer,
     ProducerOverrideSerializer,
 )
-
-
-def _utc_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _write_uploaded_artifact(*, model_root: Path, model_name: str, model_version: str, artifact_file) -> tuple[str, str]:
@@ -70,7 +57,7 @@ def _write_uploaded_artifact(*, model_root: Path, model_name: str, model_version
         for chunk in artifact_file.chunks():
             out.write(chunk)
 
-    checksum = _sha256(artifact_path)
+    checksum = sha256_file(artifact_path)
     bundle_root = model_root / model_name / model_version
     relative_path = str(artifact_path.relative_to(bundle_root).as_posix())
     return relative_path, checksum
@@ -114,7 +101,7 @@ def _build_manifest_from_upload(*, payload: dict[str, Any], artifact_path: str, 
             "class_names": [],
         },
         "metrics": payload.get("metrics") or {},
-        "created_at": _utc_iso(),
+        "created_at": utc_iso_now(),
     }
 
 

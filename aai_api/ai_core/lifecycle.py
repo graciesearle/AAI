@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from aai_api.ai_core.manifest import ManifestError, load_manifest
+from aai_api.ai_core.utils import utc_iso_now
 
 REGISTRY_SCHEMA_VERSION = "task3-lifecycle-v1"
 REGISTRY_FILE_NAME = "_lifecycle_registry.json"
@@ -13,10 +13,6 @@ REGISTRY_FILE_NAME = "_lifecycle_registry.json"
 
 class LifecycleError(ValueError):
     pass
-
-
-def _utc_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _registry_template() -> dict[str, Any]:
@@ -107,7 +103,7 @@ def _ensure_registry(model_root: Path) -> dict[str, Any]:
             "checksum": (manifest.get("artifacts") or [{}])[0].get("checksum", ""),
             "artifact_path": (manifest.get("artifacts") or [{}])[0].get("path", ""),
             "manifest_path": f"{model_name}/{model_version}/manifest.json",
-            "created_at": manifest.get("created_at") or _utc_iso(),
+            "created_at": manifest.get("created_at") or utc_iso_now(),
             "source": "manifest-discovery",
         }
         changed = True
@@ -191,7 +187,7 @@ def register_model_version(
         "checksum": first_artifact.get("checksum", ""),
         "artifact_path": first_artifact.get("path", ""),
         "manifest_path": f"{model_name}/{model_version}/manifest.json",
-        "created_at": manifest.get("created_at") or _utc_iso(),
+        "created_at": manifest.get("created_at") or utc_iso_now(),
         "source": source,
     }
 
@@ -233,7 +229,7 @@ def set_active_model_version(
         raise LifecycleError("Model version not found")
 
     previous_active = model_bucket.get("active_version")
-    activated_at = _utc_iso()
+    activated_at = utc_iso_now()
 
     model_bucket["active_version"] = model_version
     history = model_bucket.setdefault("activation_history", [])

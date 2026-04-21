@@ -1,16 +1,15 @@
-from io import BytesIO
 from pathlib import Path
 import tempfile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
-from PIL import Image
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 import torch
 
 from task2_3_4.task2_quality.task2_model import build_model
+from .test_utils import make_uploaded_png
 
 
 User = get_user_model()
@@ -65,17 +64,6 @@ class Task3LifecycleApiTests(TestCase):
             format="multipart",
         )
         return response
-
-    def _make_image(self):
-        image_data = BytesIO()
-        image = Image.new("RGB", (24, 24), color=(20, 150, 60))
-        image.save(image_data, format="PNG")
-        image_data.seek(0)
-        return SimpleUploadedFile(
-            name="sample.png",
-            content=image_data.read(),
-            content_type="image/png",
-        )
 
     def test_upload_list_and_activate_model(self):
         upload = self._upload_model("2.0.0")
@@ -170,7 +158,7 @@ class Task3LifecycleApiTests(TestCase):
             "/api/task2/predict/",
             {
                 "producer_id": 77,
-                "image": self._make_image(),
+                "image": make_uploaded_png(color=(20, 150, 60)),
             },
             format="multipart",
         )
