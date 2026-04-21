@@ -1,0 +1,36 @@
+{
+  "model_name": "produce-quality",
+  "model_version": "1.0.0",
+  "task_profile": "task2_quality",
+  "schema_version": "task2-quality-v1",
+  "framework": "pytorch",
+  "entrypoint": "aai_api.ai_core.task2_runtime:run_quality_inference",
+  "artifacts": [
+    {
+      "type": "model_weights",
+      "path": "artifacts/task2_fresh_rotten_efficientnetv2.pth",
+      "checksum": "ee876a3fe13789e375fb32b686436091cf70bcb92fec8d9c6a79283737cfd091"
+    }
+  ],
+  "input_schema": {
+    "image": "multipart-file",
+    "producer_id": "int",
+    "product_id": "int?",
+    "model_version": "str?"
+  },
+  "output_schema": {
+    "color_score": "float",
+    "size_score": "float",
+    "ripeness_score": "float",
+    "confidence": "float",
+    "predicted_class": "str",
+    "overall_grade": "str",
+    "explanation_payload": "object",
+    "inventory_action": "object",
+    "model_version_used": "str"
+  },
+  "metrics": {
+    "notes": "EfficientNetV2-S trained on FruitAndVegetable dataset. Replace with real eval metrics after validation."
+  },
+  "created_at": "2026-04-18T22:23:36Z"
+}
