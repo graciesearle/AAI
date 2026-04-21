@@ -22,21 +22,25 @@ from PIL import Image
 from pathlib import Path
 import torch
 from torchvision import transforms
-from typing import Dict, Tuple, List
+from typing import Any, Dict, Tuple, List
 
 # XAI Library Imports
 from captum.attr import IntegratedGradients, Occlusion, FeatureAblation, visualization as viz
-from lime import lime_image
+
 from pytorch_grad_cam import GradCAM, EigenCAM, ScoreCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from skimage.color import label2rgb
 from skimage.segmentation import mark_boundaries, slic
-import shap
+
         
-       
+import os
+import gc
+import matplotlib
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"      
+matplotlib.use('Agg')
 
 # Task 2 
-from task2_model import build_model, _extract_checkpoint_state_dict, CONFIG
+from task2_3_4.task2_quality.task2_model import build_model, _extract_checkpoint_state_dict
 
 
 # Wrapper Models: Grad-CAM expects a single output tensor, since our Task 2 model outputs two (logits, quality_scores), we create wrappers to seperate them.
@@ -100,7 +104,7 @@ class ProduceXAI:
         self.target_layers = [self.model.backbone.features[-1]]
 
     # Helper Functions
-    def _convert_rgb_and_resize(self, image_path: str | Path, use_scaling: bool = False, get_resized: bool = False, return_image: bool = False) -> Image.Image:
+    def _convert_rgb_and_resize(self, image_path: str | Path | Any, use_scaling: bool = False, get_resized: bool = False, return_image: bool = False) -> Image.Image:
         """
         Opens image from image path, converts to RGB, resizes it and tranforms it into an array.
         
@@ -110,6 +114,9 @@ class ProduceXAI:
         - get_resized (optional): bool to get resized image
         - return_image (optional): bool to return the converted image (not resized)
         """
+        if hasattr(image_path, 'seek'):
+            image_path.seek(0)
+
         image = Image.open(image_path).convert("RGB")
 
         if use_scaling and get_resized and return_image:
@@ -165,9 +172,12 @@ class ProduceXAI:
         buf = io.BytesIO() # Save to disk
         fig.savefig(buf, format='jpeg', bbox_inches='tight') # save plot into the buffer
         buf.seek(0) # move pointer back to start of buffer
-        pil_image = Image.open(buf)
+        pil_image = Image.open(buf).copy()
+        buf.close()
+        fig.clf()
         if plt:
             plt.close(fig)
+            plt.close('all')
         return pil_image
 
     def generate_gradcam_explanations(self, image_path: str | Path) -> Dict[str, Image.Image]:
@@ -188,6 +198,7 @@ class ProduceXAI:
         explanations = {}
         # Explain Classification (Fresh vs Rotten)
         cls_wrapper = ClassifierWrapper(self.model).to(self.device)
+        print("Generating with Gradcam")
         with GradCAM(model=cls_wrapper, target_layers=self.target_layers) as cam:
             grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :] # [0, :] removes batch dimension, targets=None means it will target the highest scoring class
             cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True) # Overlay heatmap on image
@@ -206,10 +217,11 @@ class ProduceXAI:
 
         return explanations
     
-    def generate_lime_explanations(self, image_path: str | Path, num_samples = 500) -> Tuple[Image.Image, List[Tuple[int, float]]]:
+    def generate_lime_explanations(self, image_path: str | Path, num_samples = 100) -> Tuple[Image.Image, List[Tuple[int, float]]]:
         """
         Uses LIME to explain the Fresh/Rotten classification by breaking the image into superpixels and testing them.
         """         
+        from lime import lime_image
         img_np = self._convert_rgb_and_resize(image_path)
 
         def batch_predict(images_numpy):
@@ -272,6 +284,8 @@ class ProduceXAI:
         cls_wrapper.eval()
         ig = IntegratedGradients(cls_wrapper)
 
+        print("Generating with Integrated Gradient...")
+
         # Determine target class (if None use models highest predicted class)
         if target_idx is None:
             with torch.no_grad():
@@ -297,12 +311,12 @@ class ProduceXAI:
         return ig_pil_image
 
     
-    def generate_shap_explanation(self, image_path: str | Path, n_evals=300) -> Image.Image:
+    def generate_shap_explanation(self, image_path: str | Path, n_evals=100) -> Image.Image:
         """
         Uses SHAP to calculate Shapley values for the image.
         This explains exactly how much each region shifted the probability.
         """
-        
+        import shap
         img_np = self._convert_rgb_and_resize(image_path)
 
         # SHAP expects a function that takes [Batch, H, W, C] and returns [Batch, Classes]
@@ -393,6 +407,8 @@ class ProduceXAI:
         from being classified as 'Fresh'. 
         """
 
+        print("Generating with Counterfactual...")
+
         img_np = self._convert_rgb_and_resize(image_path)
         
         # Segment image into 20 meaningful zones
@@ -467,11 +483,13 @@ class ProduceXAI:
 
         return Image.fromarray(result_np), explanation_text
     
-    def generate_smoothgrad(self, image_path: str | Path, n_samples=20, stdev_spread=0.15) -> Image.Image:
+    def generate_smoothgrad(self, image_path: str | Path | Any, n_samples=20, stdev_spread=0.15) -> Image.Image:
         """
         Generates a SmoothGrad map. Averages multiple noisy saliency maps to remove noise.
         """
-
+        if hasattr(image_path, 'seek'):
+            image_path.seek(0)
+            
         img = Image.open(image_path).convert("RGB")
         input_tensor = self._get_input_tensor(img)
         
@@ -514,6 +532,8 @@ class ProduceXAI:
 
         input_tensor = self._get_input_tensor(img)
 
+        print("Generating with Eigencam")
+
         with EigenCAM(model=ClassifierWrapper(self.model).to(self.device), 
                       target_layers=self.target_layers) as cam:
             grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :]
@@ -532,6 +552,7 @@ class ProduceXAI:
 
         input_tensor = self._get_input_tensor(img)
 
+        print("Generating with Scorecam")
         # Score-CAM takes a few seconds because it runs a forward pass for every activation map
         with ScoreCAM(model=ClassifierWrapper(self.model).to(self.device), 
                       target_layers=self.target_layers) as cam:
@@ -620,11 +641,13 @@ class ProduceXAI:
         return "\n".join(narrative)
 
     
-    def generate_master_audit_report(self, image_path: str | Path) -> Image.Image:
+    def generate_master_audit_report(self, image_path: str | Path | Any) -> Image.Image:
         """
         Report: Tiles all 10 XAI methods into a single professional document.
         """
-        print(f"Generating Audit Report for {Path(image_path).name}...")
+        raw_name = getattr(image_path, 'name', str(image_path))
+        file_name = Path(raw_name).name
+        print(f"Generating Audit Report for {file_name}...")
 
         # Gather all Data
         label, conf, scores = self._get_model_outputs(image_path)
@@ -635,20 +658,28 @@ class ProduceXAI:
         original_img = self._convert_rgb_and_resize(image_path, get_resized=True)
         gc_dict = self.generate_gradcam_explanations(image_path)
         m1 = gc_dict['classification']
+        torch.cuda.empty_cache(); gc.collect()
         m2 = self.generate_eigen_cam(image_path)
+        torch.cuda.empty_cache(); gc.collect()
         m3 = self.generate_score_cam(image_path)
+        torch.cuda.empty_cache(); gc.collect()
         m5 = self.generate_integrated_gradient(image_path)
+        torch.cuda.empty_cache(); gc.collect()
         m6 = self.generate_feature_ablation(image_path)
+        torch.cuda.empty_cache(); gc.collect()
         m7 = self.generate_shap_explanation(image_path)
+        torch.cuda.empty_cache(); gc.collect()
         m8 = self.generate_occlusion_explanation(image_path)
+        torch.cuda.empty_cache(); gc.collect()
         m10 = self.generate_smoothgrad(image_path)
+        torch.cuda.empty_cache(); gc.collect()
 
         # Build the Narrative Text
         narrative = self.generate_textual_explanation(label, conf, scores, lime_weights, cf_insight)
 
         # Create the Layout (Grid on left, Text on right)
         plt.clf()
-        fig = plt.figure(figsize=(30, 20), facecolor='#F8F9FA')
+        fig = plt.figure(figsize=(20, 12), facecolor='#F8F9FA')
         # 3 rows, 5 columns. Columns 0-3 for images, Column 4 for text.
         gs = fig.add_gridspec(3, 5) 
 
@@ -674,7 +705,7 @@ class ProduceXAI:
                      family='monospace', linespacing=1.5,
                      bbox=dict(boxstyle='round,pad=1', facecolor='white', edgecolor='#CCCCCC', alpha=1.0))
         
-        fig.suptitle(f"Digital Marketplace: AI Summary\nProduct: {Path(image_path).name}", 
+        fig.suptitle(f"Digital Marketplace: AI Summary\nProduct: {file_name}", 
                      fontsize=32, fontweight='bold', color='#2C3E50', y=0.98)
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])

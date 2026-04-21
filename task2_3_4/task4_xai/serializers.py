@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 
 class ExplainRequestSerializer(serializers.Serializer):
-    prediction_id = serializers.CharField(max_length=64, required=False)
+    image = serializers.ImageField(required=True)
     model_name = serializers.CharField(max_length=120, required=False)
     model_version = serializers.CharField(max_length=64, required=False)
     context = serializers.DictField(required=False)
