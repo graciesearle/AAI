@@ -17,6 +17,7 @@ import copy
 import cv2
 import io
 import numpy as np
+import math
 import matplotlib.pyplot as plt
 from PIL import Image
 from pathlib import Path
@@ -35,8 +36,7 @@ from skimage.segmentation import mark_boundaries, slic
         
 import os
 import gc
-import matplotlib
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"      
+import matplotlib 
 matplotlib.use('Agg')
 
 # Task 2 
@@ -104,7 +104,7 @@ class ProduceXAI:
         self.target_layers = [self.model.backbone.features[-1]]
 
     # Helper Functions
-    def _convert_rgb_and_resize(self, image_path: str | Path | Any, use_scaling: bool = False, get_resized: bool = False, return_image: bool = False) -> Image.Image:
+    def _convert_rgb_and_resize(self, image_input: str | Path | Any, use_scaling: bool = False, get_resized: bool = False, return_image: bool = False) -> Image.Image | np.ndarray:
         """
         Opens image from image path, converts to RGB, resizes it and tranforms it into an array.
         
@@ -114,10 +114,13 @@ class ProduceXAI:
         - get_resized (optional): bool to get resized image
         - return_image (optional): bool to return the converted image (not resized)
         """
-        if hasattr(image_path, 'seek'):
-            image_path.seek(0)
 
-        image = Image.open(image_path).convert("RGB")
+        if isinstance(image_input, Image.Image):
+            image = image_input.copy()
+        else:
+            if hasattr(image_input, 'seek'):
+                image_input.seek(0)
+            image = Image.open(image_input).convert("RGB")
 
         if use_scaling and get_resized and return_image:
             print("You cannot set any 2 of use_scaling get_resized and return_image to True. It will only return the image.")
@@ -127,12 +130,10 @@ class ProduceXAI:
             return image
         
         img_resized = image.resize((self.image_size, self.image_size))
-
         if get_resized:
             return img_resized
         
         img_np = np.array(img_resized)
-
         if use_scaling:
             scaled_np = img_np / 255
             return scaled_np
@@ -215,6 +216,8 @@ class ProduceXAI:
                 cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
                 explanations[metric_name] = Image.fromarray(cam_image)
 
+        del cls_wrapper
+        torch.cuda.empty_cache()
         return explanations
     
     def generate_lime_explanations(self, image_path: str | Path, num_samples = 100) -> Tuple[Image.Image, List[Tuple[int, float]]]:
@@ -292,7 +295,7 @@ class ProduceXAI:
                 logits = cls_wrapper(input_tensor)
                 target_idx = torch.argmax(logits, dim=1).item()
 
-        attributions, approximation_error = ig.attribute(input_tensor, target=target_idx,  return_convergence_delta=True)
+        attributions, approximation_error = ig.attribute(input_tensor, target=target_idx, n_steps=10,  return_convergence_delta=True)
 
         # Convert from [1, 3, 224, 224] -> [224, 224, 3]
         attributions_np = np.transpose(attributions.squeeze(0).cpu().detach().numpy(), (1, 2, 0))
@@ -483,14 +486,11 @@ class ProduceXAI:
 
         return Image.fromarray(result_np), explanation_text
     
-    def generate_smoothgrad(self, image_path: str | Path | Any, n_samples=20, stdev_spread=0.15) -> Image.Image:
+    def generate_smoothgrad(self, image_input: str | Path | Any, n_samples=5, stdev_spread=0.15) -> Image.Image:
         """
         Generates a SmoothGrad map. Averages multiple noisy saliency maps to remove noise.
         """
-        if hasattr(image_path, 'seek'):
-            image_path.seek(0)
-            
-        img = Image.open(image_path).convert("RGB")
+        img = self._convert_rgb_and_resize(image_input, return_image=True)
         input_tensor = self._get_input_tensor(img)
         
         # Calculate standard deviation for noise based on the range of pixels
@@ -512,12 +512,16 @@ class ProduceXAI:
             
             total_gradients += noisy_input.grad.data.abs()
 
+            # Cleanup this iteration before starting next one
+            del noisy_input, output, score
+            torch.cuda.empty_cache()
+
         avg_gradients = total_gradients[0].cpu().mean(dim=0).numpy()
         
         plt.clf()
         plt.imshow(avg_gradients, cmap='hot')
         plt.axis('off')
-        plt.title("SmoothGrad (De-Noised Saliency)")
+        plt.title("SmoothGrad")
 
         smoothgrad_pil_img = self._convert_matplot_to_img(plt)
         return smoothgrad_pil_img
@@ -533,12 +537,15 @@ class ProduceXAI:
         input_tensor = self._get_input_tensor(img)
 
         print("Generating with Eigencam")
+        wrapper = ClassifierWrapper(self.model).to(self.device)
 
-        with EigenCAM(model=ClassifierWrapper(self.model).to(self.device), 
+        with EigenCAM(model=wrapper, 
                       target_layers=self.target_layers) as cam:
             grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :]
             cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
             
+        del wrapper
+        torch.cuda.empty_cache()
         return Image.fromarray(cam_image)
         
 
@@ -553,12 +560,15 @@ class ProduceXAI:
         input_tensor = self._get_input_tensor(img)
 
         print("Generating with Scorecam")
+        wrapper = ClassifierWrapper(self.model).to(self.device)
         # Score-CAM takes a few seconds because it runs a forward pass for every activation map
-        with ScoreCAM(model=ClassifierWrapper(self.model).to(self.device), 
+        with ScoreCAM(model=wrapper, 
                       target_layers=self.target_layers) as cam:
             grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :]
             cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
             
+        del wrapper
+        torch.cuda.empty_cache()
         return Image.fromarray(cam_image)
 
     def generate_feature_ablation(self, image_path: str | Path, target_idx: int = None) -> Image.Image:
@@ -614,24 +624,27 @@ class ProduceXAI:
             ""
         ]
 
-        # Model-Generated Statistical Ranking (LIME), sort the weights to show the top 3 regions the model was most sensitive to
-        narrative.append("Model Sensitivity Ranking: (Refer to LIME Plot numbers)")
-        narrative.append("The model's decision was mathematically driven by these regions:")
-        # Sort weights by absolute importance
-        top_features = sorted(lime_weights, key=lambda x: abs(x[1]), reverse=True)[:3]
-        for i, (feat_id, weight) in enumerate(top_features):
-            impact = "Positive Contribution" if weight > 0 else "Negative"
-            narrative.append(f" {i+1}. Region #{feat_id:02} | Impact Score: {abs(weight):.4f} ({impact})")
+        if lime_weights:
+            # Model-Generated Statistical Ranking (LIME), sort the weights to show the top 3 regions the model was most sensitive to
+            narrative.append("Model Sensitivity Ranking: (Refer to LIME Plot numbers)")
+            narrative.append("The model's decision was mathematically driven by these regions:")
+            # Sort weights by absolute importance
+            top_features = sorted(lime_weights, key=lambda x: abs(x[1]), reverse=True)[:3]
+            for i, (feat_id, weight) in enumerate(top_features):
+                impact = "Positive Contribution" if weight > 0 else "Negative"
+                narrative.append(f" {i+1}. Region #{feat_id:02} | Impact Score: {abs(weight):.4f} ({impact})")
+            narrative.append("")
+
 
         # Anchor Logic (From Counterfactual)
-        narrative.append("")
-        narrative.append("Decision Anchor: (Refer to Counterfactual Plot)")
-        # Extract the % change from counterfactual insight string
-        improvement_line = counterfactual_insight.splitlines()[-1]
-        narrative.append(f"- {improvement_line}")
+        if counterfactual_insight:
+            narrative.append("Decision Anchor: (Refer to Counterfactual Plot)")
+            # Extract the % change from counterfactual insight string
+            improvement_line = counterfactual_insight.splitlines()[-1]
+            narrative.append(f"- {improvement_line}")
+            narrative.append("")
 
         # Quality Logic 
-        narrative.append("")
         narrative.append("Business Threshold:")
         if label.lower() == "rotten":
             narrative.append("- Critical: AI detected active decay. Immediate Grade C assignment.")
@@ -641,72 +654,95 @@ class ProduceXAI:
         return "\n".join(narrative)
 
     
-    def generate_master_audit_report(self, image_path: str | Path | Any) -> Image.Image:
+    def generate_master_audit_report(self, image_path: str | Path | Any, selected_methods: list = None) -> Image.Image:
         """
-        Report: Tiles all 10 XAI methods into a single professional document.
+        Report: Dynamically generates the selected XAI methods into a grid.
         """
-        raw_name = getattr(image_path, 'name', str(image_path))
+        raw_name = getattr(image_path, 'name', 'Uploaded Image')
         file_name = Path(raw_name).name
         print(f"Generating Audit Report for {file_name}...")
 
-        # Gather all Data
-        label, conf, scores = self._get_model_outputs(image_path)
-        lime_img, lime_weights = self.generate_lime_explanations(image_path)
-        cf_img, cf_insight = self.generate_counterfactual(image_path)
+        # Load into pil image
+        base_pil_img = self._convert_rgb_and_resize(image_path, return_image=True)
+
+        # Gather baseline data
+        label, conf, scores = self._get_model_outputs(base_pil_img)
         
-        # Collect all 10 methods
-        original_img = self._convert_rgb_and_resize(image_path, get_resized=True)
-        gc_dict = self.generate_gradcam_explanations(image_path)
-        m1 = gc_dict['classification']
-        torch.cuda.empty_cache(); gc.collect()
-        m2 = self.generate_eigen_cam(image_path)
-        torch.cuda.empty_cache(); gc.collect()
-        m3 = self.generate_score_cam(image_path)
-        torch.cuda.empty_cache(); gc.collect()
-        m5 = self.generate_integrated_gradient(image_path)
-        torch.cuda.empty_cache(); gc.collect()
-        m6 = self.generate_feature_ablation(image_path)
-        torch.cuda.empty_cache(); gc.collect()
-        m7 = self.generate_shap_explanation(image_path)
-        torch.cuda.empty_cache(); gc.collect()
-        m8 = self.generate_occlusion_explanation(image_path)
-        torch.cuda.empty_cache(); gc.collect()
-        m10 = self.generate_smoothgrad(image_path)
-        torch.cuda.empty_cache(); gc.collect()
+        # Default to all 10 methods if none provided
+        if not selected_methods:
+            selected_methods = ['heatmaps', 'pixel', 'counterfactual', 'hideseek', 'integrated']
+
+        # Tracking variables
+        plot_imgs = [self._convert_rgb_and_resize(base_pil_img, get_resized=True)]
+        titles = ["Original Image"]
+        lime_weights = None
+        cf_insight = None
+
+        if 'heatmaps' in selected_methods:
+            gc_dict = self.generate_gradcam_explanations(base_pil_img)
+            plot_imgs.extend([gc_dict['classification'], self.generate_eigen_cam(base_pil_img), 
+                              self.generate_score_cam(base_pil_img), self.generate_smoothgrad(base_pil_img)])
+            titles.extend(["1. Grad-CAM", "2. Eigen-CAM", "3. Score-CAM", "4. SmoothGrad"])
+            torch.cuda.empty_cache(); gc.collect()
+
+        if 'pixel' in selected_methods:
+            lime_img, lime_weights = self.generate_lime_explanations(base_pil_img, num_samples=100)
+            plot_imgs.extend([lime_img, self.generate_shap_explanation(base_pil_img, n_evals=100)])
+            titles.extend(["5. LIME", "6. SHAP"])
+            torch.cuda.empty_cache(); gc.collect()
+
+        if 'counterfactual' in selected_methods:
+            cf_img, cf_insight = self.generate_counterfactual(base_pil_img)
+            plot_imgs.append(cf_img)
+            titles.append("7. Counterfactual")
+            torch.cuda.empty_cache(); gc.collect()
+
+        if 'hideseek' in selected_methods:
+            plot_imgs.extend([self.generate_occlusion_explanation(base_pil_img), 
+                            self.generate_feature_ablation(base_pil_img)])
+            titles.extend(["8. Occlusion", "9. Feature Ablation"])
+            torch.cuda.empty_cache(); gc.collect()
+
+        if 'integrated' in selected_methods:
+            plot_imgs.append(self.generate_integrated_gradient(base_pil_img))
+            titles.append("10. Integrated Gradients")
+            torch.cuda.empty_cache(); gc.collect()
 
         # Build the Narrative Text
         narrative = self.generate_textual_explanation(label, conf, scores, lime_weights, cf_insight)
 
-        # Create the Layout (Grid on left, Text on right)
+        # Dynamic Layout
+        n_images = len(plot_imgs)
+        max_cols = 4 
+        rows = math.ceil(n_images / max_cols)
+
+        # We define widths: the images get 1 part each, the text gets 1.5 parts
+        # This prevents the text from crushing the images
+        width_ratios = ([1] * max_cols) + [1.5] 
+
         plt.clf()
-        fig = plt.figure(figsize=(20, 12), facecolor='#F8F9FA')
-        # 3 rows, 5 columns. Columns 0-3 for images, Column 4 for text.
-        gs = fig.add_gridspec(3, 5) 
+        fig = plt.figure(figsize=(max_cols * 4 + 6, rows * 4 + 2), facecolor='#F8F9FA')
+        
+        # Grid for images and column for text.
+        gs = fig.add_gridspec(rows, max_cols + 1, width_ratios=width_ratios)
 
-        # Map images to the first 4 columns
-        plot_imgs = [original_img, m1, m2, m3, lime_img, m5, m6, m7, m8, cf_img, m10]
-        titles = ["Original Image", "1. Grad-CAM", "2. Eigen-CAM", 
-            "3. Score-CAM", "4. LIME", "5. Int. Gradients", 
-            "6. Feature Ablation", "7. SHAP", "8. Occlusion", 
-            "9. Counterfactual", "10. SmoothGrad"]
-
-        # Draw the Images in the first 4 columns
-        for i in range(len(plot_imgs)):
-            row, col = divmod(i, 4) # This ensures we use 4 columns for images
-            ax = fig.add_subplot(gs[row, col])
+        # Draw the Images 
+        for i in range(n_images):
+            r, c = divmod(i, max_cols) 
+            ax = fig.add_subplot(gs[r, c])
             ax.imshow(plot_imgs[i])
-            ax.set_title(titles[i], fontsize=16, fontweight='bold', pad=10)
+            ax.set_title(titles[i], fontsize=16, fontweight='bold', pad=8)
             ax.axis('off')
 
-        # Draw the Narrative Text in the 5th column (spanning all rows)
-        text_ax = fig.add_subplot(gs[:, 4])
+        # Draw the Narrative Text in last column
+        text_ax = fig.add_subplot(gs[:, max_cols])
         text_ax.axis('off')
-        text_ax.text(0, 0.95, narrative, fontsize=16, verticalalignment='top', 
-                     family='monospace', linespacing=1.5,
-                     bbox=dict(boxstyle='round,pad=1', facecolor='white', edgecolor='#CCCCCC', alpha=1.0))
+        text_ax.text(0, 0.95, narrative, fontsize=14, verticalalignment='top', 
+                     family='monospace', linespacing=1.6,
+                     bbox=dict(boxstyle='round,pad=1.5', facecolor='white', edgecolor='#CCCCCC', alpha=1.0))
         
         fig.suptitle(f"Digital Marketplace: AI Summary\nProduct: {file_name}", 
-                     fontsize=32, fontweight='bold', color='#2C3E50', y=0.98)
+                     fontsize=24, fontweight='bold', color='#2C3E50', y=0.98)
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
 
