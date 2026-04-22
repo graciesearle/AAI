@@ -27,6 +27,9 @@ class ExplainAdapterView(APIView):
             checkpoint_path = get_bundle_root(cfg.model_root, model_name, model_version) / artifact["path"]
         except (ManifestError, StopIteration):
             return Response({"detail": "Model not found."}, status=404)
+        
+        methods_str = serializer.validated_data.get("methods", "")
+        methods_list = [m.strip() for m in methods_str.split(",")] if methods_str else []
 
         try:
             payload = build_explanation(
@@ -35,12 +38,15 @@ class ExplainAdapterView(APIView):
                 model_name=model_name,
                 model_version=model_version,
                 manifest=manifest,
+                methods = methods_list,
                 device=cfg.ai_device
             )
             output = ExplainResponseSerializer(payload)
             return Response(output.data, status=status.HTTP_200_OK)
 
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         
