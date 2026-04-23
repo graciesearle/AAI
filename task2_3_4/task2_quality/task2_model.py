@@ -211,9 +211,9 @@ def assign_overall_grade(scores: Dict[str, Dict[str, Any]], is_rotten: bool = Fa
     # Weights: Colour 30%, Shape 40%, Ripeness 30%
     weighted_score = (c * 0.30) + (s * 0.40) + (r * 0.30)
 
-    if weighted_score >= 72.0:
+    if weighted_score >= 68.0:
         return "A"
-    if weighted_score >= 55.0:
+    if weighted_score >= 50.0:
         return "B"
     return "C"
 

@@ -41,29 +41,42 @@ from task2_model import (
 def evaluate_quality_with_clip(image: Image.Image, predicted_class: str, clip_model, clip_processor, device) -> dict:
     base_item = predicted_class.split("_")[0].lower()
 
+    # Case statement for specific items with tailored prompts, otherwise fallback to generic prompts - as to avoid giving the same prompts for all items which may not be equally relevant (e.g. colour grading for a potato vs a tomato).
     specific_prompts = {
         "banana": {
             "ripeness": [
                 ("a photo of a perfectly ripe and fresh banana", 100),
-                ("a photo of a standard, edible banana", 75),
+                ("a photo of a standard, edible banana", 90), # Adjusted from 75 to 90 to reflect that most bananas in the dataset are likely to be in this category, and we want to reward them more than the fallback prompts.
                 ("a photo of an unripe or overripe, mealy banana", 30)
             ],
             "colour": [
                 ("a banana with vibrant, bright, and uniform colour", 100),
-                ("a banana with natural, standard colour and minor blemishes", 75),
+                ("a banana with natural, standard colour and minor blemishes", 90), # Same as ripeness adjustment for consistency.
                 ("a banana with dull, uneven, or significantly discoloured skin", 20)
             ]
         },
         "apple": {
             "ripeness": [
                 ("a photo of a perfectly ripe and fresh apple", 100),
-                ("a photo of a standard, edible apple", 75),
+                ("a photo of a standard, edible apple", 90), # Adjusted from 75 to 90 to reflect that most apples in the dataset are likely to be in this category, and we want to reward them more than the fallback prompts.
                 ("a photo of an unripe or overripe, mealy apple", 30)
             ],
             "colour": [
                 ("an apple with vibrant, bright, and uniform colour", 100),
-                ("an apple with natural, standard colour and minor blemishes", 75),
+                ("an apple with natural, standard colour and minor blemishes", 90), # Same as ripeness adjustment for consistency.
                 ("an apple with dull, uneven, or significantly discoloured skin", 20)
+            ]
+        },
+        "potato": {
+            "ripeness": [
+                ("a photo of a perfectly ripe and fresh potato", 100),
+                ("a photo of a standard, edible potato", 90), # Adjusted from 75 to 90 to reflect that most potatoes in the dataset are likely to be in this category, and we want to reward them more than the fallback prompts.
+                ("a photo of an unripe or overripe, mealy potato", 30)
+            ],
+            "colour": [
+                ("a potato with bright, and uniform colour", 100),
+                ("a potato with natural, standard colour and minor blemishes", 90), # Same as ripeness adjustment for consistency.
+                ("a potato with dull, uneven, or significantly discoloured skin", 20)
             ]
         }
     }
@@ -71,19 +84,19 @@ def evaluate_quality_with_clip(image: Image.Image, predicted_class: str, clip_mo
     fallback_prompts = {
         "ripeness": [
             (f"a photo of a perfectly ripe and fresh {base_item}", 100),
-            (f"a photo of a standard, edible {base_item}", 75),
+            (f"a photo of a standard, edible {base_item}", 90), # Adjusted from 75 to 90 for consistency.
             (f"a photo of an unripe or overripe, mealy {base_item}", 30)
         ],
         "colour": [
             (f"a {base_item} with vibrant, bright, and uniform colour", 100),
-            (f"a {base_item} with natural, standard colour and minor blemishes", 75),
+            (f"a {base_item} with natural, standard colour and minor blemishes", 90), # Same as ripeness adjustment for consistency.
             (f"a {base_item} with dull, uneven, or significantly discoloured skin", 20)
         ]
     }
 
     shape_prompts = [
         (f"a perfectly symmetrical, retail-standard {base_item}", 100),
-        (f"a normal, whole, and intact {base_item} with minor organic variations", 75),
+        (f"a normal, whole, and intact {base_item} with minor organic variations", 90), # Same as ripeness adjustment for consistency.
         (f"a severely deformed, broken, or crushed {base_item}", 20)
     ]
     
