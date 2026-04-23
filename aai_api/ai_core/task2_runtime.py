@@ -1,122 +1,202 @@
 """
 task2_runtime.py — Task 2 quality inference bridge.
 
-Delegates model construction and post-processing to task2_model (Gracie's split
-module), which owns the MultiTaskProduceNet architecture (EfficientNetV2-S
-backbone + classification head + quality regression head).
-
-predict_single_image() from task2_predict.py is intentionally NOT imported here
-— it requires a file path on disk. This module handles BinaryIO file uploads
-from the API directly using PIL.Image.open(), which accepts file-like objects
-without writing to disk.
-
-If functions in task2_model are renamed, refer to these docstrings to locate
-the correct replacement for each import.
+Delegates model construction and post-processing to task2_model. 
+Handles BinaryIO file uploads from the API directly using PIL.Image.open().
 """
+import cv2
+import numpy as np
+import torch
 from PIL import Image
 from torchvision import transforms
-import torch
+from transformers import CLIPModel, CLIPProcessor
 
 from task2_3_4.task2_quality.task2_model import (
-    build_model,                     # Constructs the EfficientNetV2-S multitask model
-    _extract_checkpoint_state_dict,  # Normalises checkpoint keys across save formats
-    process_prediction,              # Validates scores, assigns A/B/C grade, returns inventory action
+    build_model,                     
+    _extract_checkpoint_state_dict,  
+    process_prediction,              
+    normalize_label
 )
 
+def evaluate_quality_with_clip(image: Image.Image, predicted_class: str, clip_model, clip_processor, device) -> dict:
+    """Zero-shot CLIP grading using the calibrated 3-tier prompt system."""
+    base_item = predicted_class.split("_")[0].lower()
 
-def run_quality_inference(*, image_file, checkpoint_path):
-    """Run EfficientNetV2-S multitask inference on an uploaded image (BinaryIO).
+    specific_prompts = {
+        "banana": {
+            "ripeness": [
+                ("a photo of a perfectly ripe and fresh banana", 100),
+                ("a photo of a standard, edible banana", 90),
+                ("a photo of an unripe or overripe, mealy banana", 30)
+            ],
+            "colour": [
+                ("a banana with vibrant, bright, and uniform colour", 100),
+                ("a banana with natural, standard colour and minor blemishes", 90),
+                ("a banana with dull, uneven, or significantly discoloured skin", 20)
+            ]
+        },
+        "apple": {
+            "ripeness": [
+                ("a photo of a perfectly ripe and fresh apple", 100),
+                ("a photo of a standard, edible apple", 90),
+                ("a photo of an unripe or overripe, mealy apple", 30)
+            ],
+            "colour": [
+                ("an apple with vibrant, bright, and uniform colour", 100),
+                ("an apple with natural, standard colour and minor blemishes", 90),
+                ("an apple with dull, uneven, or significantly discoloured skin", 20)
+            ]
+        }
+    }
 
-    Reads class_names and image_size directly from the checkpoint — Gracie's
-    training script (task2_train.py) embeds both fields at save time, so we
-    do not need to duplicate them in the manifest output_schema.
+    fallback_prompts = {
+        "ripeness": [
+            (f"a photo of a perfectly ripe and fresh {base_item}", 100),
+            (f"a photo of a standard, edible {base_item}", 90),
+            (f"a photo of an unripe or overripe, mealy {base_item}", 30)
+        ],
+        "colour": [
+            (f"a {base_item} with vibrant, bright, and uniform colour", 100),
+            (f"a {base_item} with natural, standard colour and minor blemishes", 90),
+            (f"a {base_item} with dull, uneven, or significantly discoloured skin", 20)
+        ]
+    }
 
-    Args:
-        image_file: A file-like object (BinaryIO / InMemoryUploadedFile) — no
-                    temp file is written to disk.
-        checkpoint_path: Path to the .pth checkpoint on disk.
+    shape_prompts = [
+        (f"a perfectly symmetrical, retail-standard {base_item}", 100),
+        (f"a normal, whole, and intact {base_item} with minor organic variations", 90),
+        (f"a severely deformed, broken, or crushed {base_item}", 20)
+    ]
 
-    Returns:
-        dict with keys: normalized_label, overall_grade, quality_scores,
-        inventory_action, explanation_payload, confidence.
-    """
+    item_prompts = specific_prompts.get(base_item, fallback_prompts)
+
+    def get_weighted_score(prompt_data):
+        texts = [p[0] for p in prompt_data]
+        weights = [p[1] for p in prompt_data]
+
+        inputs = clip_processor(text=texts, images=image, return_tensors="pt", padding=True).to(device)
+
+        with torch.no_grad():
+            outputs = clip_model(**inputs)
+
+        probs = outputs.logits_per_image.softmax(dim=1).squeeze().cpu().tolist()
+        final_score = sum(prob * weight for prob, weight in zip(probs, weights))
+        max_prob_idx = probs.index(max(probs))
+        winning_prompt = texts[max_prob_idx]
+
+        return {"score": round(final_score, 2), "justification": winning_prompt}
+
+    return {
+        "colour": get_weighted_score(item_prompts["colour"]),
+        "shape": get_weighted_score(shape_prompts),
+        "ripeness": get_weighted_score(item_prompts["ripeness"])
+    }
+
+
+def run_quality_inference(*, image_file, checkpoint_path: str) -> dict:
+    """Run chained EfficientNetV2-S and CLIP inference on an uploaded image stream."""
+    print("[AAI PIPELINE LOG] Starting quality inference for Task 2...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # 1. Load the EfficientNet Gatekeeper
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
     class_names = checkpoint.get("class_names")
     image_size = checkpoint.get("image_size", 224)
+    
     if not class_names:
-        raise ValueError(
-            "Checkpoint is missing 'class_names'. Re-train with task2_train.py "
-            "to produce a checkpoint that embeds class metadata."
-        )
+        raise ValueError("Checkpoint is missing 'class_names'.")
 
     model = build_model(num_classes=len(class_names), device=device, use_pretrained=False)
-    state_dict = _extract_checkpoint_state_dict(checkpoint)
-    model.load_state_dict(state_dict, strict=False)
+    model.load_state_dict(_extract_checkpoint_state_dict(checkpoint), strict=False)
     model.eval()
+
+    # 2. Load the CLIP Model
+    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    clip_model.eval()
+
+    # 3. Read and Process the Image stream
+    image_file.seek(0)
+    raw_pil = Image.open(image_file).convert("RGB")
+    
+    # Denoise for the Grader (Strips salt-and-pepper artifacts)
+    cv_img = cv2.cvtColor(np.array(raw_pil), cv2.COLOR_RGB2BGR)
+    denoised_cv = cv2.medianBlur(cv_img, 3)
+    clean_pil = Image.fromarray(cv2.cvtColor(denoised_cv, cv2.COLOR_BGR2RGB))
 
     preprocess = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
+    
+    # Gatekeeper uses the raw image
+    tensor = preprocess(raw_pil).unsqueeze(0).to(device)
 
-    image_file.seek(0)
-    image = Image.open(image_file).convert("RGB")
-    tensor = preprocess(image).unsqueeze(0).to(device)
-
+    # 4. Gatekeeper Inference
     with torch.no_grad():
-        logits, q_preds = model(tensor)
+        logits = model(tensor) 
         probs = torch.softmax(logits, dim=1)
         confidence, pred_idx = torch.max(probs, dim=1)
 
     label = class_names[pred_idx.item()]
-    q_np = torch.clamp(q_preds.squeeze(0), 0.0, 100.0).cpu().numpy()
-    
-    quality_scores = {
-        "colour": round(float(q_np[0]), 2),
-        "size":   round(float(q_np[1]), 2),
-        "ripeness": round(float(q_np[2]), 2),
-    }
+    normalized_label = normalize_label(label)
+    confidence_pct = confidence.item() * 100.0
 
-    # Generate authoritative base prediction
+    # 5. Conditional Routing
+    if normalized_label == "rotten":
+        quality_scores = {
+            "colour": {"score": 0.0, "justification": None},
+            "shape": {"score": 0.0, "justification": None},
+            "ripeness": {"score": 0.0, "justification": None},
+        }
+    else:
+        # TTA (Test-Time Augmentation): Average scores across original & flipped views
+        views = [clean_pil, clean_pil.transpose(Image.FLIP_LEFT_RIGHT)]
+        all_scores = []
+        for view in views:
+            scores = evaluate_quality_with_clip(view, label, clip_model, clip_processor, device)
+            all_scores.append(scores)
+
+        quality_scores = {}
+        for metric in ["colour", "shape", "ripeness"]:
+            avg_score = sum(s[metric]["score"] for s in all_scores) / len(all_scores)
+            quality_scores[metric] = {
+                "score": round(avg_score, 2),
+                "justification": all_scores[0][metric]["justification"]
+            }
+
+    # 6. Post-process and package payload
     result = process_prediction(
         label=label,
-        confidence=confidence.item(),
+        confidence=confidence_pct / 100.0,
         quality_scores=quality_scores,
     )
-    
-    # --- Generate XAI Derivations for Academic Rubric Compliance ---
-    # The spec requires us to explain *how* the grade and recommendation
-    # were derived. We inject these explanatory strings directly into the
-    # explanation_payload here.
+
+    # 7. Generate XAI Derivations for Academic Rubric Compliance
     grade = result["overall_grade"]
-    label = result["normalized_label"]
     
     if grade == "C":
-        if label == "rotten":
+        if normalized_label == "rotten":
             grade_derivation = "Assigned Grade C because the classification model detected severe defects/rot."
         else:
-            grade_derivation = "Assigned Grade C because one or more quality metrics fell below threshold (Colour < 65, Size < 70, or Ripeness < 60)."
+            grade_derivation = "Assigned Grade C because one or more quality metrics fell below threshold."
         rec_derivation = "Grade C indicates immediate risk of spoilage. Fast sale or heavy markdown recommended."
     elif grade == "B":
         grade_derivation = "Assigned Grade B because one or more quality metrics fell below the top-tier thresholds but remained above critical levels."
         rec_derivation = "Grade B stock requires moderate markdowns or close monitoring depending on confidence."
     else:
-        grade_derivation = "Assigned Grade A because all metrics exceeded high-quality thresholds (Colour >= 75, Size >= 80, Ripeness >= 70)."
+        grade_derivation = "Assigned Grade A because all metrics exceeded high-quality thresholds."
         rec_derivation = "Grade A stock warrants keeping standard retail pricing."
     
     explanation_payload = {
         "model_artifact": str(checkpoint_path),
-        "architecture": "efficientnetv2_s_multitask",
+        "architecture": "efficientnetv2_s_multitask + clip_zero_shot",
         "score_breakdown": quality_scores,
         "grade_derivation": grade_derivation,
         "recommendation_derivation": rec_derivation,
-        "model_confidence_percentage": round(confidence.item() * 100.0, 2),
+        "model_confidence_percentage": round(confidence_pct, 2),
     }
     
     result["explanation_payload"] = explanation_payload
-    
     return result

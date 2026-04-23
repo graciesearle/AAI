@@ -36,6 +36,9 @@ class QualityPredictAdapterView(APIView):
         except ManifestError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
+        if cfg.verbose_inference_logging:
+            print("\n[AAI PIPELINE LOG] Received quality prediction request")
+
         try:
             artifact_item = next((a for a in manifest.get("artifacts", []) if a.get("type") == "model_weights"), None)
             if not artifact_item:
@@ -47,6 +50,9 @@ class QualityPredictAdapterView(APIView):
                 image_file=serializer.validated_data["image"],
                 checkpoint_path=checkpoint_path,
             )
+
+            if cfg.verbose_inference_logging:
+                print(f"[AAI PIPELINE LOG] Inference completed for model '{model_name}' version '{model_version}'")
             
             latency_ms = (time.time() - start_time) * 1000.0
             
@@ -66,16 +72,43 @@ class QualityPredictAdapterView(APIView):
             predicted_class = payload["normalized_label"]
             overall_grade = payload["overall_grade"]
 
+            # Safely extract scores whether they are flat floats (old) or dictionaries (new zero-shot)
+            def _extract_score(metric_key, fallback_key=None):
+                val = quality_scores.get(metric_key)
+                if val is None and fallback_key:
+                    val = quality_scores.get(fallback_key)
+                return val.get("score") if isinstance(val, dict) else float(val or 0.0)
+
+            # Safely extract justifications for the XAI payload
+            def _extract_justification(metric_key, fallback_key=None):
+                val = quality_scores.get(metric_key)
+                if val is None and fallback_key:
+                    val = quality_scores.get(fallback_key)
+                return val.get("justification") if isinstance(val, dict) else None
+
+            color_score = _extract_score("colour")
+            # Map our new 'shape' logic to the DESD 'size_score' contract
+            size_score = _extract_score("shape", fallback_key="size") 
+            ripeness_score = _extract_score("ripeness")
+
+            explanation_payload = payload.get("explanation_payload", {})
+            # Inject our zero-shot prompt justifications into the explanation payload for Task 4
+            explanation_payload["zero_shot_justifications"] = {
+                "color": _extract_justification("colour"),
+                "size": _extract_justification("shape", fallback_key="size"),
+                "ripeness": _extract_justification("ripeness")
+            }
+
             response_data = {
-                "color_score": quality_scores["colour"],
-                "size_score": quality_scores["size"],
-                "ripeness_score": quality_scores["ripeness"],
+                "color_score": color_score,
+                "size_score": size_score,
+                "ripeness_score": ripeness_score,
                 "confidence": confidence_pct,
                 "predicted_class": predicted_class,
                 "overall_grade": overall_grade,
                 "model_name_used": model_name,
                 "model_version_used": model_version,
-                "explanation_payload": payload.get("explanation_payload", {}),
+                "explanation_payload": explanation_payload,
                 "inventory_action": payload.get("inventory_action", {}),
                 "latency_ms": latency_ms,
             }
@@ -86,13 +119,17 @@ class QualityPredictAdapterView(APIView):
                 product_id=serializer.validated_data.get("product_id"),
                 model_version=model_version,
                 confidence=confidence_pct,
-                color_score=quality_scores["colour"],
-                size_score=quality_scores["size"],
-                ripeness_score=quality_scores["ripeness"],
+                color_score=color_score,
+                size_score=size_score,
+                ripeness_score=ripeness_score,
                 predicted_grade=overall_grade
             )
 
         except Exception as exc:
+            # TEMP DEBUG:
+            import traceback
+            traceback.print_exc()  # <--- ADD THIS LINE to reveal the hidden crash
+            
             return Response(
                 {"detail": f"Model inference failed for '{model_name}/{model_version}': {exc}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -100,3 +137,5 @@ class QualityPredictAdapterView(APIView):
 
         output = QualityPredictResponseSerializer(response_data)
         return Response(output.data, status=status.HTTP_200_OK)
+    
+    

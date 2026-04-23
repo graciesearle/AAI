@@ -6,9 +6,14 @@
           "activated_at": "2026-04-18T22:24:14Z",
           "model_version": "1.0.0",
           "source": "local-setup"
+        },
+        {
+          "activated_at": "2026-04-23T16:51:56Z",
+          "model_version": "1.1.0",
+          "source": "activate"
         }
       ],
-      "active_version": "1.0.0",
+      "active_version": "1.1.0",
       "versions": {
         "1.0.0": {
           "activated_at": "2026-04-18T22:24:14Z",
@@ -19,6 +24,19 @@
           "manifest_path": "produce-quality/1.0.0/manifest.json",
           "model_name": "produce-quality",
           "model_version": "1.0.0",
+          "schema_version": "task2-quality-v1",
+          "source": "manifest-discovery",
+          "task_profile": "task2_quality"
+        },
+        "1.1.0": {
+          "activated_at": "2026-04-23T16:51:56Z",
+          "artifact_path": "artifacts/fresh_rotten_efficientnetv2.pth",
+          "checksum": "2345b6d09f916a429cab092087f1af91e7cc3c0d890cd5ce4fd7be40b2dd0aed",
+          "created_at": "2026-04-23T16:51:05Z",
+          "framework": "pytorch",
+          "manifest_path": "produce-quality/1.1.0/manifest.json",
+          "model_name": "produce-quality",
+          "model_version": "1.1.0",
           "schema_version": "task2-quality-v1",
           "source": "manifest-discovery",
           "task_profile": "task2_quality"
