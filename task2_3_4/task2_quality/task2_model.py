@@ -1,16 +1,14 @@
-"""Shared model, utilities, data loading, and quality scoring for Task 2.
+"""Shared model, utilities, robust data loading, and grading for Task 2.
 
-This module contains all shared components used by both the training
-and prediction scripts:
-- Model architecture (EfficientNetV2-S multitask network)
-- Data loading and augmentation pipeline
-- Quality proxy target computation
-- Quality scoring, grading, and inventory actions
+This module contains shared components used by both training and prediction:
+- EfficientNetV2-S gatekeeper model for Fresh vs Rotten classification
+- Robust ImageFolder loading with unreadable-image filtering
+- Data splitting and dataloader creation
+- Post-processing for quality scores and inventory actions
 """
 
 from __future__ import annotations
 
-import copy
 import os
 import random
 import ssl
@@ -21,15 +19,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from urllib.error import URLError
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image, UnidentifiedImageError
-from torch.optim import Adam
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
-from torchvision.models import efficientnet_v2_s, EfficientNet_V2_S_Weights
+from torchvision.models import EfficientNet_V2_S_Weights, efficientnet_v2_s
 
 
 @dataclass
@@ -40,33 +36,20 @@ class History:
     val_total_loss: List[float]
     train_cls_loss: List[float]
     val_cls_loss: List[float]
-    train_quality_loss: List[float]
-    val_quality_loss: List[float]
     train_acc: List[float]
     val_acc: List[float]
 
 
-@dataclass(frozen=True)
-class QualityScores:
-    """Container for quality percentages in the range [0, 100]."""
-
-    colour: float
-    size: float
-    ripeness: float
-
-
 @dataclass
 class RunConfig:
-    """Editable training configuration for local runs/Colab notebooks."""
+    """Editable training configuration for local runs and notebooks."""
 
-    dataset_dir: Path = Path("FruitAndVegetableDataset")
+    dataset_dir: Path = Path("../task2_data")
     epochs: int = 20
     batch_size: int = 32
     learning_rate: float = 3e-4
     weight_decay: float = 1e-4
     label_smoothing: float = 0.05
-    quality_loss_weight: float = 0.1
-    quality_warmup_epochs: int = 3
     image_size: int = 224
     patience: int = 5
     early_stop_min_delta: float = 1e-4
@@ -79,14 +62,12 @@ class RunConfig:
 
 
 CONFIG = RunConfig(
-    dataset_dir=Path("FruitAndVegetableDataset"),
+    dataset_dir=Path("../task2_data"),
     epochs=20,
     batch_size=32,
     learning_rate=3e-4,
     weight_decay=1e-4,
     label_smoothing=0.05,
-    quality_loss_weight=0.1,
-    quality_warmup_epochs=3,
     image_size=224,
     patience=5,
     early_stop_min_delta=1e-4,
@@ -141,40 +122,100 @@ def normalize_label(label: str) -> str:
 # Quality scoring and grading
 # ---------------------------------------------------------------------------
 
-def validate_quality_scores(
-    quality_scores: Dict[str, float] | QualityScores,
-) -> QualityScores:
-    """Validate and normalize quality-score inputs from a deep model head."""
-    if isinstance(quality_scores, QualityScores):
-        return QualityScores(
-            colour=round(clamp(float(quality_scores.colour)), 2),
-            size=round(clamp(float(quality_scores.size)), 2),
-            ripeness=round(clamp(float(quality_scores.ripeness)), 2),
-        )
+def _coerce_quality_component(component: Any, metric_name: str) -> Dict[str, Any]:
+    """Normalize one quality component into score/justification form."""
+    if isinstance(component, dict):
+        if "score" not in component:
+            raise ValueError(f"'{metric_name}' must contain a 'score' field.")
+        score = round(clamp(float(component["score"])), 2)
+        justification_raw = component.get("justification")
+        if justification_raw is None:
+            justification = None
+        elif isinstance(justification_raw, str):
+            cleaned = justification_raw.strip()
+            justification = cleaned if cleaned else None
+        else:
+            justification = str(justification_raw)
+        return {"score": score, "justification": justification}
 
-    required_keys = {"colour", "size", "ripeness"}
-    missing = required_keys - set(quality_scores.keys())
+    if isinstance(component, (int, float, np.integer, np.floating)):
+        score = round(clamp(float(component)), 2)
+        return {"score": score, "justification": None}
+
+    raise ValueError(
+        f"'{metric_name}' must be a number or a dictionary with keys "
+        "'score' and optional 'justification'."
+    )
+
+
+def validate_quality_scores(quality_scores: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Validate and normalize incoming quality scores.
+
+    Accepts either:
+    - {'colour': 88.0, 'shape': 91.5, 'ripeness': 86.0}
+    - {'colour': {'score': 88.0, 'justification': '...'}, ...}
+
+    For backward compatibility, 'size' is accepted and mapped to 'shape'.
+    """
+    if not isinstance(quality_scores, dict):
+        raise ValueError("quality_scores must be a dictionary.")
+
+    payload = dict(quality_scores)
+    if "shape" not in payload and "size" in payload:
+        payload["shape"] = payload["size"]
+
+    required_keys = {"colour", "shape", "ripeness"}
+    missing = required_keys - set(payload.keys())
     if missing:
         missing_keys = ", ".join(sorted(missing))
         raise ValueError(f"quality_scores is missing required keys: {missing_keys}")
 
-    return QualityScores(
-        colour=round(clamp(float(quality_scores["colour"])), 2),
-        size=round(clamp(float(quality_scores["size"])), 2),
-        ripeness=round(clamp(float(quality_scores["ripeness"])), 2),
-    )
+    return {
+        "colour": _coerce_quality_component(payload["colour"], "colour"),
+        "shape": _coerce_quality_component(payload["shape"], "shape"),
+        "ripeness": _coerce_quality_component(payload["ripeness"], "ripeness"),
+    }
 
+#  Original grading logic using hard thresholds, which is simpler but less forgiving to borderline cases. Retained for reference.
+# def assign_overall_grade(scores: Dict[str, Dict[str, Any]], is_rotten: bool = False) -> str:
+#     """Assign grade using calibrated zero-shot thresholds for organic produce."""
+#     if is_rotten:
+#         return "C"
 
-def assign_overall_grade(scores: QualityScores, is_rotten: bool = False) -> str:
-    """Assign grade using strict thresholds: A>=85/90/80, C<65/70/60, else B. ROTTEN forces C."""
+#     colour_score = float(scores["colour"]["score"])
+#     shape_score = float(scores["shape"]["score"])
+#     ripeness_score = float(scores["ripeness"]["score"])
+
+#     # Calibrated thresholds to account for Softmax Dilution in 3-tier prompting
+#     if colour_score < 50.0 or shape_score < 55.0 or ripeness_score < 50.0:
+#         return "C"
+#     if colour_score >= 70.0 and shape_score >= 70.0 and ripeness_score >= 65.0:
+#         return "A"
+#     return "B"
+
+# Weighted average grading, allows a very bad score in one metric to be compensated by strong scores in others, which is more realistic for produce grading in practice.
+def assign_overall_grade(scores: Dict[str, Dict[str, Any]], is_rotten: bool = False) -> str:
+    """Assign grade using a weighted average for higher robustness."""
     if is_rotten:
         return "C"
-    
-    if scores.colour < 65.0 or scores.size < 70.0 or scores.ripeness < 60.0:
+
+    c = float(scores["colour"]["score"])
+    s = float(scores["shape"]["score"])
+    r = float(scores["ripeness"]["score"])
+
+    # 1. Hard Floor: If any metric is truly terrible, it's a C
+    if c < 35.0 or s < 40.0 or r < 35.0:
         return "C"
-    if scores.colour >= 75.0 and scores.size >= 80.0 and scores.ripeness >= 70.0:
+
+    # 2. Weighted Calculation (Shape is often most reliable for quality)
+    # Weights: Colour 30%, Shape 40%, Ripeness 30%
+    weighted_score = (c * 0.30) + (s * 0.40) + (r * 0.30)
+
+    if weighted_score >= 72.0:
         return "A"
-    return "B"
+    if weighted_score >= 55.0:
+        return "B"
+    return "C"
 
 
 def update_inventory_and_discount(grade: str) -> Dict[str, object]:
@@ -208,87 +249,33 @@ def update_inventory_and_discount(grade: str) -> Dict[str, object]:
 def process_prediction(
     label: str,
     confidence: float,
-    quality_scores: Dict[str, float] | QualityScores,
+    quality_scores: Dict[str, Any],
 ) -> Dict[str, object]:
-    """End-to-end post-processing for a single deep-model prediction."""
+    """End-to-end post-processing for a single prediction.
+
+    The returned quality_scores object preserves score and justification for
+    explainable UI rendering in downstream consumers.
+    """
     normalized_label = normalize_label(label)
     scores = validate_quality_scores(quality_scores)
-    is_rotten = (normalized_label == "rotten")
-    
+    is_rotten = normalized_label == "rotten"
+
     grade = assign_overall_grade(scores, is_rotten=is_rotten)
     inventory_action = update_inventory_and_discount(grade)
 
     return {
         "input_label": label,
         "normalized_label": normalized_label,
-        "defect_detected": normalized_label == "rotten",
+        "defect_detected": is_rotten,
         "input_confidence": round(clamp(confidence, 0.0, 1.0), 4),
         "quality_scores": {
-            "colour": scores.colour,
-            "size": scores.size,
-            "ripeness": scores.ripeness,
+            "colour": scores["colour"],
+            "shape": scores["shape"],
+            "ripeness": scores["ripeness"],
         },
         "overall_grade": grade,
         "inventory_action": inventory_action,
     }
-
-
-# ---------------------------------------------------------------------------
-# Quality proxy targets (computed from image pixels for multitask training)
-# ---------------------------------------------------------------------------
-
-def _safe_mean(values: np.ndarray) -> float:
-    return 0.0 if values.size == 0 else float(np.mean(values))
-
-
-def _safe_std(values: np.ndarray) -> float:
-    return 0.0 if values.size == 0 else float(np.std(values))
-
-
-def compute_quality_proxy_targets(image: Image.Image) -> np.ndarray:
-    """Create proxy quality targets from image pixels for multitask learning."""
-    rgb = image.convert("RGB").resize((256, 256))
-    hsv = np.asarray(rgb.convert("HSV"), dtype=np.float32) / 255.0
-    hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-
-    mask = ((sat > 0.12) | (val < 0.92)) & (val > 0.08)
-    if float(np.mean(mask)) < 0.03:
-        mask = np.ones_like(mask, dtype=bool)
-
-    sat_pixels, val_pixels = sat[mask], val[mask]
-    mean_sat = _safe_mean(sat_pixels)
-    mean_val = _safe_mean(val_pixels)
-    val_std = _safe_std(val_pixels)
-
-    brown_mask = mask & (hue >= 0.05) & (hue <= 0.14) & (sat >= 0.2) & (val <= 0.65)
-    brown_ratio = float(np.mean(brown_mask[mask])) if np.any(mask) else 0.0
-
-    area_ratio = float(np.mean(mask))
-    ys, xs = np.where(mask)
-    if ys.size > 0 and xs.size > 0:
-        bbox_ratio = float((ys.max() - ys.min() + 1) * (xs.max() - xs.min() + 1)) / float(mask.size)
-        fill_ratio = area_ratio / max(bbox_ratio, 1e-6)
-    else:
-        fill_ratio = 0.0
-
-    saturation_score = 100.0 * mean_sat
-    brightness_score = 100.0 * clamp(1.0 - abs(mean_val - 0.65) / 0.65, 0.0, 1.0)
-    colour = 0.6 * saturation_score + 0.4 * brightness_score - 35.0 * brown_ratio
-
-    size = 0.8 * (100.0 * clamp((area_ratio - 0.08) / 0.52, 0.0, 1.0)) + \
-           0.2 * (100.0 * clamp(fill_ratio, 0.0, 1.0))
-
-    uniformity_score = 100.0 * clamp(1.0 - min(val_std / 0.25, 1.0), 0.0, 1.0)
-    ripeness = (
-        0.45 * clamp(colour, 0.0, 100.0)
-        + 0.30 * uniformity_score
-        + 0.25 * (100.0 - 100.0 * brown_ratio)
-    )
-
-    return np.array(
-        [clamp(colour, 0.0, 100.0), clamp(size, 0.0, 100.0), clamp(ripeness, 0.0, 100.0)],
-        dtype=np.float32,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +296,8 @@ def _safe_pil_loader(path: str) -> Image.Image:
             return image.convert("RGB")
 
 
-class QualityProxyImageFolder(datasets.ImageFolder):
-    """ImageFolder variant that returns pre-cached proxy quality targets per sample."""
+class RobustImageFolder(datasets.ImageFolder):
+    """ImageFolder variant that filters unreadable files up front."""
 
     def __init__(
         self,
@@ -319,10 +306,13 @@ class QualityProxyImageFolder(datasets.ImageFolder):
         target_transform=None,
         loader=_safe_pil_loader,
         validated_samples: List[Tuple[str, int]] | None = None,
-        cached_quality_targets: List[torch.Tensor] | None = None,
     ) -> None:
-        super().__init__(root=root, transform=transform,
-                         target_transform=target_transform, loader=loader)
+        super().__init__(
+            root=root,
+            transform=transform,
+            target_transform=target_transform,
+            loader=loader,
+        )
 
         if validated_samples is not None:
             self.samples = list(validated_samples)
@@ -335,23 +325,6 @@ class QualityProxyImageFolder(datasets.ImageFolder):
         self.imgs = self.samples
         self.targets = [target for _, target in self.samples]
 
-        # Pre-compute quality targets once to avoid repeated HSV analysis.
-        if cached_quality_targets is not None:
-            self._quality_cache = list(cached_quality_targets)
-        else:
-            print(f"Pre-computing quality proxy targets for {len(self.samples)} images...")
-            self._quality_cache = []
-            for i, (path, _) in enumerate(self.samples):
-                try:
-                    img = self.loader(path)
-                    qt = torch.tensor(compute_quality_proxy_targets(img), dtype=torch.float32)
-                except Exception:
-                    qt = torch.zeros(3, dtype=torch.float32)
-                self._quality_cache.append(qt)
-                if (i + 1) % 2000 == 0:
-                    print(f"  ...processed {i + 1}/{len(self.samples)} images")
-            print("Quality target pre-computation complete.")
-
     @staticmethod
     def _is_readable_image(path: str) -> bool:
         try:
@@ -362,27 +335,25 @@ class QualityProxyImageFolder(datasets.ImageFolder):
 
     @classmethod
     def _filter_valid_samples(cls, samples: List[Tuple[str, int]]) -> List[Tuple[str, int]]:
-        valid = [(p, t) for p, t in samples if cls._is_readable_image(p)]
+        valid = [(path, target) for path, target in samples if cls._is_readable_image(path)]
         skipped = len(samples) - len(valid)
         if skipped > 0:
             print(f"Skipping {skipped} unreadable image file(s) in dataset.")
         return valid
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, torch.Tensor]:
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
         path, target = self.samples[index]
         try:
             sample = self.loader(path)
         except (UnidentifiedImageError, OSError) as exc:
             raise RuntimeError(f"Unreadable image encountered after validation: {path}") from exc
 
-        quality_target = self._quality_cache[index]
-
         if self.transform is not None:
             sample = self.transform(sample)
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return sample, target, quality_target
+        return sample, target
 
 
 def set_seed(seed: int) -> None:
@@ -400,8 +371,11 @@ def _contains_supported_image(directory: Path, recursive: bool = True) -> bool:
 
 
 def _count_direct_image_subdirs(directory: Path) -> int:
-    return sum(1 for p in directory.iterdir()
-               if p.is_dir() and _contains_supported_image(p, recursive=False))
+    return sum(
+        1
+        for p in directory.iterdir()
+        if p.is_dir() and _contains_supported_image(p, recursive=False)
+    )
 
 
 def resolve_dataset_root(dataset_dir: Path) -> Path | None:
@@ -436,7 +410,7 @@ def build_transforms(image_size: int) -> Tuple[transforms.Compose, transforms.Co
         transforms.RandomRotation(degrees=20),
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
-        AddGaussianNoise(mean=0.0, std=0.03),  # applied on [0,1] range before Normalize
+        AddGaussianNoise(mean=0.0, std=0.03),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         transforms.RandomErasing(p=0.15, scale=(0.02, 0.2)),
     ])
@@ -456,8 +430,8 @@ def split_indices(
         raise ValueError("Cannot split an empty dataset.")
 
     class_to_indices: Dict[int, List[int]] = {}
-    for idx, t in enumerate(targets):
-        class_to_indices.setdefault(t, []).append(idx)
+    for idx, target in enumerate(targets):
+        class_to_indices.setdefault(target, []).append(idx)
 
     rng = random.Random(seed)
     train_indices: List[int] = []
@@ -490,15 +464,20 @@ def compute_class_weights(targets: List[int], num_classes: int) -> torch.Tensor:
     """Compute normalized inverse-frequency class weights from train targets."""
     if not targets:
         raise ValueError("Cannot compute class weights without training targets.")
+
     target_tensor = torch.tensor(targets, dtype=torch.long)
     class_counts = torch.clamp(torch.bincount(target_tensor, minlength=num_classes).float(), min=1.0)
     weights = class_counts.sum() / (num_classes * class_counts)
     weights = weights / weights.mean()
-    return torch.clamp(weights, max=10.0)  # cap at 10x to prevent extreme loss spikes
+    return torch.clamp(weights, max=10.0)
 
 
 def create_dataloaders(
-    dataset_dir: Path, image_size: int, batch_size: int, num_workers: int, seed: int,
+    dataset_dir: Path,
+    image_size: int,
+    batch_size: int,
+    num_workers: int,
+    seed: int,
 ) -> Tuple[DataLoader, DataLoader, List[str], torch.Tensor]:
     """Build train/val loaders and class weights using a stratified 80/20 split."""
     resolved = resolve_dataset_root(dataset_dir)
@@ -508,28 +487,43 @@ def create_dataloaders(
         )
 
     train_tf, val_tf = build_transforms(image_size=image_size)
-    base_dataset = QualityProxyImageFolder(root=str(resolved))
+    base_dataset = RobustImageFolder(root=str(resolved))
     if len(base_dataset) == 0:
         raise ValueError(f"No images found in dataset directory: {resolved}")
 
     class_names = base_dataset.classes
     train_idx, val_idx = split_indices(base_dataset.targets, train_ratio=0.8, seed=seed)
     class_weights = compute_class_weights(
-        [base_dataset.targets[i] for i in train_idx], num_classes=len(class_names),
+        [base_dataset.targets[i] for i in train_idx],
+        num_classes=len(class_names),
     )
 
-    train_ds = QualityProxyImageFolder(root=str(resolved), transform=train_tf,
-                                       validated_samples=base_dataset.samples,
-                                       cached_quality_targets=base_dataset._quality_cache)
-    val_ds = QualityProxyImageFolder(root=str(resolved), transform=val_tf,
-                                     validated_samples=base_dataset.samples,
-                                     cached_quality_targets=base_dataset._quality_cache)
+    train_ds = RobustImageFolder(
+        root=str(resolved),
+        transform=train_tf,
+        validated_samples=base_dataset.samples,
+    )
+    val_ds = RobustImageFolder(
+        root=str(resolved),
+        transform=val_tf,
+        validated_samples=base_dataset.samples,
+    )
 
     pin = torch.cuda.is_available()
-    train_loader = DataLoader(Subset(train_ds, train_idx), batch_size=batch_size,
-                              shuffle=True, num_workers=num_workers, pin_memory=pin)
-    val_loader = DataLoader(Subset(val_ds, val_idx), batch_size=batch_size,
-                            shuffle=False, num_workers=num_workers, pin_memory=pin)
+    train_loader = DataLoader(
+        Subset(train_ds, train_idx),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin,
+    )
+    val_loader = DataLoader(
+        Subset(val_ds, val_idx),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin,
+    )
     return train_loader, val_loader, class_names, class_weights
 
 
@@ -537,8 +531,8 @@ def create_dataloaders(
 # Model architecture
 # ---------------------------------------------------------------------------
 
-class MultiTaskProduceNet(nn.Module):
-    """EfficientNetV2-S backbone with classification and quality regression heads."""
+class ProduceHealthClassifier(nn.Module):
+    """EfficientNetV2-S gatekeeper classifier for Fresh vs Rotten prediction."""
 
     def __init__(self, backbone: nn.Module, feature_dim: int, num_classes: int) -> None:
         super().__init__()
@@ -547,43 +541,31 @@ class MultiTaskProduceNet(nn.Module):
             nn.Dropout(p=0.5),
             nn.Linear(feature_dim, num_classes),
         )
-        self.quality_head = nn.Sequential(
-            nn.Linear(feature_dim, 256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.3),
-            nn.Linear(256, 3),
-            nn.Sigmoid(),
-        )
 
-    def train(self, mode: bool = True) -> "MultiTaskProduceNet":
-        """Override train() to keep frozen BN layers in eval mode.
-
-        EfficientNetV2 has batch norm throughout. When layers are frozen, their
-        BN running stats should not be updated during training — otherwise eval
-        mode uses stale ImageNet stats, causing massive train/val discrepancy.
-        """
+    def train(self, mode: bool = True) -> "ProduceHealthClassifier":
+        """Keep frozen BN layers in eval mode while training unfrozen layers."""
         super().train(mode)
         if mode:
             for module in self.backbone.modules():
                 if isinstance(module, (nn.BatchNorm2d, nn.SyncBatchNorm)):
-                    # Only keep BN in eval for frozen layers.
                     if not any(p.requires_grad for p in module.parameters()):
                         module.eval()
         return self
 
-    def forward(self, images: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
         features = self.backbone(images)
         if features.ndim > 2:
             features = torch.flatten(features, start_dim=1)
         logits = self.classifier_head(features)
-        quality_scores = self.quality_head(features) * 100.0
-        return logits, quality_scores
+        return logits
 
 
 def build_model(
-    num_classes: int, device: torch.device, use_pretrained: bool = True,
+    num_classes: int,
+    device: torch.device,
+    use_pretrained: bool = True,
 ) -> nn.Module:
-    """Create transfer-learning multitask model with an EfficientNetV2-S backbone."""
+    """Create transfer-learning gatekeeper model with EfficientNetV2-S backbone."""
     pretrained_loaded = False
 
     if use_pretrained:
@@ -595,6 +577,7 @@ def build_model(
             if "CERTIFICATE_VERIFY_FAILED" in str(exc).upper():
                 try:
                     import certifi
+
                     cafile = certifi.where()
                     os.environ.setdefault("SSL_CERT_FILE", cafile)
                     os.environ.setdefault("REQUESTS_CA_BUNDLE", cafile)
@@ -610,24 +593,29 @@ def build_model(
                     retry_error = cert_exc
 
             if not pretrained_loaded:
-                print(f"Warning: Could not download pretrained weights ({retry_error}). "
-                      "Falling back to randomly initialized weights.")
+                print(
+                    f"Warning: Could not download pretrained weights ({retry_error}). "
+                    "Falling back to randomly initialized weights."
+                )
                 backbone = efficientnet_v2_s(weights=None)
     else:
         backbone = efficientnet_v2_s(weights=None)
 
     if pretrained_loaded:
-        # Freeze all layers; unfreeze the last 3 feature blocks for fine-tuning.
         for param in backbone.parameters():
             param.requires_grad = False
         for block in backbone.features[-3:]:
             for param in block.parameters():
                 param.requires_grad = True
 
-    # EfficientNetV2 uses backbone.classifier instead of backbone.fc.
     feature_dim = backbone.classifier[1].in_features
     backbone.classifier = nn.Identity()
-    model = MultiTaskProduceNet(backbone=backbone, feature_dim=feature_dim, num_classes=num_classes)
+
+    model = ProduceHealthClassifier(
+        backbone=backbone,
+        feature_dim=feature_dim,
+        num_classes=num_classes,
+    )
     return model.to(device)
 
 
@@ -654,10 +642,17 @@ def _extract_checkpoint_state_dict(checkpoint: object) -> Dict[str, torch.Tensor
     for key, value in raw.items():
         if not torch.is_tensor(value):
             continue
+
         clean = key[len("module."):] if key.startswith("module.") else key
-        if clean.startswith(("backbone.", "classifier_head.", "quality_head.")):
+
+        if clean.startswith(("backbone.", "classifier_head.")):
             normalised[clean] = value
-        elif clean.startswith("fc."):
+            continue
+
+        if clean.startswith("quality_head."):
+            continue
+
+        if clean.startswith("fc."):
             suffix = clean[len("fc."):]
             for prefix in ("0.", "1."):
                 if suffix.startswith(prefix):
@@ -665,8 +660,16 @@ def _extract_checkpoint_state_dict(checkpoint: object) -> Dict[str, torch.Tensor
                     break
             if suffix in {"weight", "bias"}:
                 normalised[f"classifier_head.1.{suffix}"] = value
-        else:
-            normalised[f"backbone.{clean}"] = value
+            continue
+
+        if clean.startswith("classifier.1."):
+            suffix = clean[len("classifier.1."):]
+            if suffix in {"weight", "bias"}:
+                normalised[f"classifier_head.1.{suffix}"] = value
+            continue
+
+        normalised[f"backbone.{clean}"] = value
+
     return normalised
 
 
