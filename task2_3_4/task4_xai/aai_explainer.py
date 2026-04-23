@@ -32,6 +32,7 @@ from pytorch_grad_cam import GradCAM, EigenCAM, ScoreCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from skimage.color import label2rgb
 from skimage.segmentation import mark_boundaries, slic
+
         
 import os
 import gc
@@ -41,15 +42,25 @@ matplotlib.use('Agg')
 # Task 2 
 from task2_3_4.task2_quality.task2_model import build_model, _extract_checkpoint_state_dict
 
-# Wrapper Models: Grad-CAM expects a single output tensor.
+
+# Wrapper Models: Grad-CAM expects a single output tensor, since our Task 2 model 
+# previously output two (logits, quality_scores), we created wrappers to seperate them.
+
 class ClassifierWrapper(torch.nn.Module):
     """Isolates the classification head for gradient-based XAI."""
     def __init__(self, model):
         super().__init__()
         self.model = model
     def forward(self, x):
-        # Model now only returns logits (single task gatekeeper)
-        return self.model(x)
+        # UPDATED: The new Gatekeeper model only returns logits (single task). 
+        # The 'logits, _' unpacking has been removed.
+        logits = self.model(x)
+        return logits
+    
+# DEPRECATED: QualityWrapper and QualityTarget have been removed.
+# The new Gatekeeper architecture delegates quality scoring (Colour/Size/Ripeness)
+# to a Zero-Shot CLIP model later in the pipeline, meaning there is no longer a 
+# quality regression head in the EfficientNet model to extract gradients from.
     
 
 class ProduceXAI:
@@ -77,7 +88,7 @@ class ProduceXAI:
         self.preprocess = transforms.Compose([
             transforms.Resize((self.image_size, self.image_size)),
             transforms.ToTensor(), # Converts to tensor: scales pixel values from 0.0 to 1.0
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), 
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # Numbers as recomended by docs https://docs.pytorch.org/vision/0.9/models.html computed over the ImageNet dataset. 
         ])
 
         # Last convolutional layer
@@ -87,7 +98,14 @@ class ProduceXAI:
     def _convert_rgb_and_resize(self, image_input: str | Path | Any, use_scaling: bool = False, get_resized: bool = False, return_image: bool = False) -> Image.Image | np.ndarray:
         """
         Opens image from image path, converts to RGB, resizes it and tranforms it into an array.
+        
+        Arguments:
+        - image_path (Required): the path to the image.
+        - use_scaling (optional): bool to use scaling (/255)
+        - get_resized (optional): bool to get resized image
+        - return_image (optional): bool to return the converted image (not resized)
         """
+
         if isinstance(image_input, Image.Image):
             image = image_input.copy()
         else:
@@ -114,7 +132,7 @@ class ProduceXAI:
         return img_np
 
     def _get_input_tensor(self, img: Image) -> torch.Tensor:
-        input_tensor = self.preprocess(img).unsqueeze(0).to(self.device) 
+        input_tensor = self.preprocess(img).unsqueeze(0).to(self.device) # Adds batch dimension as torch sometimes requires it
         return input_tensor
     
     def _get_model_outputs(self, image_path: str | Path) -> Tuple[str, float, Dict[str, float]]:
@@ -123,6 +141,7 @@ class ProduceXAI:
         input_tensor = self._get_input_tensor(img_pil)
         self.model.eval()
         with torch.no_grad():
+            # UPDATED: Removed quality_tensor unpack as the model is now single-task
             logits = self.model(input_tensor)
             
             # Process Classification
@@ -130,6 +149,8 @@ class ProduceXAI:
             conf, idx = torch.max(probs, dim=1)
             label = self.class_names[idx.item()]
             
+        # UPDATED: Return dummy 0.0s for the explanation payload. Real quality scores
+        # are now computed by CLIP in task2_runtime.py.
         quality_dict = {
             "colour": 0.0,
             "size": 0.0,
@@ -152,9 +173,15 @@ class ProduceXAI:
 
     def generate_gradcam_explanations(self, image_path: str | Path) -> Dict[str, Image.Image]:
         """
-        Generates heatmap explaining Classification.
+        Generates 4 heatmaps explaining:
+        1. Classification
+        2. Colour
+        3. Size
+        4. Ripeness
+
         Returns a dictionary of PIL Images.
         """
+        
         img = self._convert_rgb_and_resize(image_path, return_image=True)
         rgb_img = self._convert_rgb_and_resize(image_path, use_scaling=True)
         input_tensor = self._get_input_tensor(img)
@@ -164,9 +191,13 @@ class ProduceXAI:
         cls_wrapper = ClassifierWrapper(self.model).to(self.device)
         print("Generating with Gradcam")
         with GradCAM(model=cls_wrapper, target_layers=self.target_layers) as cam:
-            grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :] 
-            cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True) 
+            grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :] # [0, :] removes batch dimension, targets=None means it will target the highest scoring class
+            cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True) # Overlay heatmap on image
             explanations["classification"] = Image.fromarray(cam_image)
+
+        # DEPRECATED: Explain Quality Scores (Colour, size, ripeness)
+        # The GradCAM loop for quality metrics has been removed because the Gatekeeper
+        # model no longer computes them. Quality is now handled via zero-shot text prompts.
 
         del cls_wrapper
         torch.cuda.empty_cache()
@@ -184,6 +215,7 @@ class ProduceXAI:
             batch = torch.stack([self.preprocess(Image.fromarray(img)) for img in images_numpy], dim=0).to(self.device)
 
             with torch.no_grad():
+                # UPDATED: Single task model only returns logits
                 logits = self.model(batch)
                 probs = torch.nn.functional.softmax(logits, dim=1)
             return probs.cpu().numpy()
@@ -196,23 +228,29 @@ class ProduceXAI:
             batch_predict,
             top_labels=1,
             hide_color=0,
-            num_samples=num_samples 
+            num_samples=num_samples # Lower samples = faster but less accurate
         )
 
+        # Get mask for top predicted class
         top_class = explanation.top_labels[0]
+        # This returns a list of (segment_id, weight)
         feature_weights = explanation.local_exp[top_class]
         temp, mask = explanation.get_image_and_mask(
             top_class,
-            positive_only=True, 
-            num_features=5, 
+            positive_only=True, # Only show areas that contributed to the prediction
+            num_features=5, # Show top 5 superpixels
             hide_rest=True
         )
 
+        # Draw green boundaries around important areas
         img_boundary = mark_boundaries(temp / 255.0, mask)
+        # Convert back to PIL image
         img_boundary_uint8 = np.uint8(img_boundary * 255)
 
+         # Draw numbers on the regions 
         segments = explanation.segments
         for i in range(np.max(segments) + 1):
+            # Find the center of this segment to place the text
             coords = np.argwhere(segments == i)
             if len(coords) == 0: continue
             cy, cx = coords.mean(axis=0).astype(int)
@@ -235,19 +273,22 @@ class ProduceXAI:
 
         print("Generating with Integrated Gradient...")
 
+        # Determine target class (if None use models highest predicted class)
         if target_idx is None:
             with torch.no_grad():
                 logits = cls_wrapper(input_tensor)
                 target_idx = torch.argmax(logits, dim=1).item()
 
         attributions, approximation_error = ig.attribute(input_tensor, target=target_idx, n_steps=10,  return_convergence_delta=True)
+
+        # Convert from [1, 3, 224, 224] -> [224, 224, 3]
         attributions_np = np.transpose(attributions.squeeze(0).cpu().detach().numpy(), (1, 2, 0))
 
         fig, axis = viz.visualize_image_attr(
             attributions_np,
             img_np,
             method="alpha_scaling",
-            sign="absolute_value", 
+            sign="absolute_value", # Highlights magnitude of importance (both positive and negative)
             show_colorbar=True,
             title=f"Integrated Gradients (Class: {self.class_names[target_idx]})",
             use_pyplot=False
@@ -256,13 +297,16 @@ class ProduceXAI:
         ig_pil_image = self._convert_matplot_to_img(fig)
         return ig_pil_image
 
+    
     def generate_shap_explanation(self, image_path: str | Path, n_evals=100) -> Image.Image:
         """
         Uses SHAP to calculate Shapley values for the image.
+        This explains exactly how much each region shifted the probability.
         """
         import shap
         img_np = self._convert_rgb_and_resize(image_path)
 
+        # SHAP expects a function that takes [Batch, H, W, C] and returns [Batch, Classes]
         def predict_fn(images_np):
             self.model.eval()
             batch_tensors = []
@@ -272,11 +316,15 @@ class ProduceXAI:
             
             batch = torch.stack(batch_tensors, dim=0).to(self.device)
             with torch.no_grad():
+                # UPDATED: Single task model only returns logits
                 logits = self.model(batch)
                 probs = torch.nn.functional.softmax(logits, dim=1)
             return probs.cpu().numpy()
 
+        # Use a blur masker to hide parts of the image during testing
         masker = shap.maskers.Image("blur(32,32)", (self.image_size, self.image_size, 3))
+        
+        # Partition explainer is much faster for images than pixel-by-pixel SHAP
         explainer = shap.Explainer(predict_fn, masker, output_names=self.class_names)
 
         print(f"Generating SHAP Explanation (Running {n_evals} evaluations)...")
@@ -285,19 +333,22 @@ class ProduceXAI:
             img_np[np.newaxis, ...], 
             max_evals=n_evals, 
             batch_size=50,
-            outputs=shap.Explanation.argsort.flip[:1] 
+            outputs=shap.Explanation.argsort.flip[:1] # Focus on the top predicted class
         )
 
-        plt.clf() 
+        # shap.image_plot doesn't return a figure directly, so we capture the current plot
+        plt.clf() # Clear any existing plots
         shap.image_plot(shap_values, show=False)
         fig = plt.gcf()
         shap_pil_image = self._convert_matplot_to_img(fig, plt)
         return shap_pil_image
 
+
     def generate_occlusion_explanation(self, image_path: str | Path, target_idx: int = None) -> Image.Image:
         """
         Uses Occlusion (The 'Box Test') to see which regions cause the model's confidence to drop when they are hidden.
         """
+        
         img = self._convert_rgb_and_resize(image_path, return_image=True)
         img_np = self._convert_rgb_and_resize(image_path)
 
@@ -312,12 +363,14 @@ class ProduceXAI:
                 target_idx = torch.argmax(logits, dim=1).item()
 
         print("Generating Occlusion Explanation (The Box Test)...")
+        # sliding_window_shapes: The size of the grey box (15x15 pixels)
+        # strides: How many pixels the box jumps (8 pixels)
         attributions = occ.attribute(
             input_tensor,
             strides=(3, 8, 8),
             target=target_idx,
             sliding_window_shapes=(3, 15, 15),
-            baselines=0 
+            baselines=0 # The color of the box (0 = black/grey)
         )
 
         attributions_np = np.transpose(attributions.squeeze(0).cpu().detach().numpy(), (1, 2, 0))
@@ -326,7 +379,7 @@ class ProduceXAI:
             attributions_np,
             img_np,
             method="blended_heat_map",
-            sign="positive", 
+            sign="positive", # Only show where hiding the spot decreased confidence
             show_colorbar=True,
             title=f"Occlusion Sensitivity (Class: {self.class_names[target_idx]})",
             use_pyplot=False
@@ -335,29 +388,37 @@ class ProduceXAI:
         occ_pil_image = self._convert_matplot_to_img(fig, plt)
         return occ_pil_image
 
+
     def generate_counterfactual(self, image_path: str | Path) -> Tuple[Image.Image, str]:
         """
         Identifies the deal breaker region that is preventing the image 
         from being classified as 'Fresh'. 
         """
+
         print("Generating with Counterfactual...")
 
         img_np = self._convert_rgb_and_resize(image_path)
+        
+        # Segment image into 20 meaningful zones
         segments = slic(img_np, n_segments=20, compactness=10, sigma=1)
         
+        # Dynamically find the "Healthy" target for this specific fruit
         current_label, _, _ = self._get_model_outputs(image_path)
         fruit_type = current_label.split('__')[0]
         try:
+            # Find index that contains the fruit name AND the word "healthy"
             target_healthy_idx = [i for i, s in enumerate(self.class_names) 
                                  if fruit_type in s and 'healthy' in s.lower()][0]
         except IndexError:
-            target_healthy_idx = 0 
+            target_healthy_idx = 0 # Fallback
 
+        # Get the baseline (What does the AI think now?)
         def get_fresh_score(image_array):
             self.model.eval()
             pil_img = Image.fromarray(image_array.astype(np.uint8))
             tensor = self.preprocess(pil_img).unsqueeze(0).to(self.device)
             with torch.no_grad():
+                # UPDATED: Removed tuple unpacking
                 logits = self.model(tensor)
                 probs = torch.nn.functional.softmax(logits, dim=1)
                 fresh_idx = self.class_names.index("fresh") if "fresh" in self.class_names else 0
@@ -365,9 +426,11 @@ class ProduceXAI:
 
         initial_fresh_score = get_fresh_score(img_np)
         
+        # 4. Define Healing color (Median color of the fruit, ignoring background)
         fruit_mask = img_np.mean(axis=2) < 250 
         median_color = np.median(img_np[fruit_mask], axis=0) if np.any(fruit_mask) else [200, 200, 200]
 
+        # Restore each segment one by one and see which one improves the score most
         best_improvement = 0
         dealbreaker_segment = -1
         
@@ -382,6 +445,7 @@ class ProduceXAI:
                 best_improvement = improvement
                 dealbreaker_segment = i
 
+        # 6. Visualization
         mask = np.zeros(segments.shape, dtype=bool)
         if dealbreaker_segment != -1:
             mask[segments == dealbreaker_segment] = True
@@ -392,6 +456,7 @@ class ProduceXAI:
         result_img = label2rgb(mask, overlay, colors=[(0, 255, 0)], alpha=0.3, bg_label=0)
         result_np = (result_img * 255).astype(np.uint8)
         
+        # Draw "HERE" label on the image
         if dealbreaker_segment != -1:
             coords = np.argwhere(mask == True)
             if len(coords) > 0:
@@ -414,15 +479,19 @@ class ProduceXAI:
         img = self._convert_rgb_and_resize(image_input, return_image=True)
         input_tensor = self._get_input_tensor(img)
         
+        # Calculate standard deviation for noise based on the range of pixels
         stdev = stdev_spread * (input_tensor.max() - input_tensor.min())
+        
         total_gradients = torch.zeros_like(input_tensor)
 
         print(f"Generating SmoothGrad (Averaging {n_samples} samples)...")
         for i in range(n_samples):
+            # Add random noise
             noise = torch.randn_like(input_tensor) * stdev
             noisy_input = input_tensor + noise
             noisy_input.requires_grad = True
             
+            # UPDATED: Removed tuple unpacking
             output = self.model(noisy_input)
             score, _ = torch.max(output, dim=1)
             self.model.zero_grad()
@@ -430,6 +499,7 @@ class ProduceXAI:
             
             total_gradients += noisy_input.grad.data.abs()
 
+            # Cleanup this iteration before starting next one
             del noisy_input, output, score
             torch.cuda.empty_cache()
 
@@ -447,14 +517,17 @@ class ProduceXAI:
         """
         Generates a Eigen-CAM heatmap. Uses main patterns in the model's feature map to show most important parts.
         """
+
         img = self._convert_rgb_and_resize(image_path, return_image=True)
         rgb_img = self._convert_rgb_and_resize(image_path, use_scaling=True)
+
         input_tensor = self._get_input_tensor(img)
 
         print("Generating with Eigencam")
         wrapper = ClassifierWrapper(self.model).to(self.device)
 
-        with EigenCAM(model=wrapper, target_layers=self.target_layers) as cam:
+        with EigenCAM(model=wrapper, 
+                      target_layers=self.target_layers) as cam:
             grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :]
             cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
             
@@ -467,13 +540,17 @@ class ProduceXAI:
         """
         Generates a Score-CAM heatmap. This is often more accurate when the model's gradients are noisy or biased.
         """
+        
         img = self._convert_rgb_and_resize(image_path, return_image=True)
         rgb_img = self._convert_rgb_and_resize(image_path, use_scaling=True)
+
         input_tensor = self._get_input_tensor(img)
 
         print("Generating with Scorecam")
         wrapper = ClassifierWrapper(self.model).to(self.device)
-        with ScoreCAM(model=wrapper, target_layers=self.target_layers) as cam:
+        # Score-CAM takes a few seconds because it runs a forward pass for every activation map
+        with ScoreCAM(model=wrapper, 
+                      target_layers=self.target_layers) as cam:
             grayscale_cam = cam(input_tensor=input_tensor, targets=None)[0, :]
             cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
             
@@ -486,22 +563,28 @@ class ProduceXAI:
         Generates a Feature Ablation map.
         Systematically removes superpixels to see which ones are dealbreakers.
         """
+
         img = self._convert_rgb_and_resize(image_path, get_resized=True)
         img_np = self._convert_rgb_and_resize(image_path, use_scaling=True)
         input_tensor = self._get_input_tensor(img)
 
+        # 2. Create segments (superpixels) to ablate
+        # We group pixels so the ablation isn't too slow
         segments = slic(np.array(img), n_segments=50, compactness=10)
         feature_mask = torch.from_numpy(segments).unsqueeze(0).unsqueeze(0).to(self.device)
 
         if target_idx is None:
             with torch.no_grad():
+                # UPDATED: Removed tuple unpacking
                 logits = self.model(input_tensor)
                 target_idx = torch.argmax(logits, dim=1).item()
 
+        # 3. Run Ablation
         ablator = FeatureAblation(ClassifierWrapper(self.model).to(self.device))
         print("Generating Feature Ablation (Systematic Removal)...")
         attributions = ablator.attribute(input_tensor, target=target_idx, feature_mask=feature_mask)
 
+        # 4. Visualize
         attributions_np = np.transpose(attributions.squeeze(0).cpu().detach().numpy(), (1, 2, 0))
 
         fig, axis = viz.visualize_image_attr(
@@ -530,21 +613,26 @@ class ProduceXAI:
         ]
 
         if lime_weights:
+            # Model-Generated Statistical Ranking (LIME), sort the weights to show the top 3 regions the model was most sensitive to
             narrative.append("Model Sensitivity Ranking: (Refer to LIME Plot numbers)")
             narrative.append("The model's decision was mathematically driven by these regions:")
+            # Sort weights by absolute importance
             top_features = sorted(lime_weights, key=lambda x: abs(x[1]), reverse=True)[:3]
             for i, (feat_id, weight) in enumerate(top_features):
                 impact = "Positive Contribution" if weight > 0 else "Negative"
                 narrative.append(f" {i+1}. Region #{feat_id:02} | Impact Score: {abs(weight):.4f} ({impact})")
             narrative.append("")
 
+
+        # Anchor Logic (From Counterfactual)
         if counterfactual_insight:
             narrative.append("Decision Anchor: (Refer to Counterfactual Plot)")
+            # Extract the % change from counterfactual insight string
             improvement_line = counterfactual_insight.splitlines()[-1]
             narrative.append(f"- {improvement_line}")
             narrative.append("")
 
-        # Updated to reflect the separation of quality logic to the VLM
+        # UPDATED: Quality Logic now reflects the architectural transition to Zero-Shot CLIP
         narrative.append("Quality & Grade Derivation:")
         if label.lower() == "rotten":
             narrative.append("- Critical: Gatekeeper model detected active decay. Immediate Grade C assignment.")
@@ -563,12 +651,17 @@ class ProduceXAI:
         file_name = Path(raw_name).name
         print(f"Generating Audit Report for {file_name}...")
 
+        # Load into pil image
         base_pil_img = self._convert_rgb_and_resize(image_path, return_image=True)
+
+        # Gather baseline data
         label, conf, scores = self._get_model_outputs(base_pil_img)
         
+        # Default to all 10 methods if none provided
         if not selected_methods:
             selected_methods = ['heatmaps', 'pixel', 'counterfactual', 'hideseek', 'integrated']
 
+        # Tracking variables
         plot_imgs = [self._convert_rgb_and_resize(base_pil_img, get_resized=True)]
         titles = ["Original Image"]
         lime_weights = None
@@ -604,18 +697,25 @@ class ProduceXAI:
             titles.append("10. Integrated Gradients")
             torch.cuda.empty_cache(); gc.collect()
 
+        # Build the Narrative Text
         narrative = self.generate_textual_explanation(label, conf, scores, lime_weights, cf_insight)
 
+        # Dynamic Layout
         n_images = len(plot_imgs)
         max_cols = 4 
         rows = math.ceil(n_images / max_cols)
+
+        # We define widths: the images get 1 part each, the text gets 1.5 parts
+        # This prevents the text from crushing the images
         width_ratios = ([1] * max_cols) + [1.5] 
 
         plt.clf()
         fig = plt.figure(figsize=(max_cols * 4 + 6, rows * 4 + 2), facecolor='#F8F9FA')
         
+        # Grid for images and column for text.
         gs = fig.add_gridspec(rows, max_cols + 1, width_ratios=width_ratios)
 
+        # Draw the Images 
         for i in range(n_images):
             r, c = divmod(i, max_cols) 
             ax = fig.add_subplot(gs[r, c])
@@ -623,6 +723,7 @@ class ProduceXAI:
             ax.set_title(titles[i], fontsize=16, fontweight='bold', pad=8)
             ax.axis('off')
 
+        # Draw the Narrative Text in last column
         text_ax = fig.add_subplot(gs[:, max_cols])
         text_ax.axis('off')
         text_ax.text(0, 0.95, narrative, fontsize=14, verticalalignment='top', 
