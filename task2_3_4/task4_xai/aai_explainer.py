@@ -680,9 +680,30 @@ class ProduceXAI:
 
         if 'heatmaps' in selected_methods:
             gc_dict = self.generate_gradcam_explanations(base_pil_img)
-            plot_imgs.extend([gc_dict['classification'], self.generate_eigen_cam(base_pil_img), 
-                              self.generate_score_cam(base_pil_img), self.generate_smoothgrad(base_pil_img)])
-            titles.extend(["1. Grad-CAM", "2. Eigen-CAM", "3. Score-CAM", "4. SmoothGrad"])
+
+            # Add the main Classification heatmap
+            plot_imgs.append(gc_dict['classification'])
+            titles.append("1. Grad-CAM (Class)")
+
+            # Quality heads
+            plot_imgs.append(gc_dict['colour'])
+            titles.append("2. Quality: Colour")
+            
+            plot_imgs.append(gc_dict['size'])
+            titles.append("3. Quality: Size")
+            
+            plot_imgs.append(gc_dict['ripeness'])
+            titles.append("4. Quality: Ripeness")
+
+            plot_imgs.append(self.generate_eigen_cam(base_pil_img))
+            titles.append("5. Eigen-CAM")
+            
+            plot_imgs.append(self.generate_score_cam(base_pil_img))
+            titles.append("6. Score-CAM")
+            
+            plot_imgs.append(self.generate_smoothgrad(base_pil_img, n_samples=5))
+            titles.append("7. SmoothGrad")
+            
             torch.cuda.empty_cache(); gc.collect()
 
         if 'pixel' in selected_methods:
