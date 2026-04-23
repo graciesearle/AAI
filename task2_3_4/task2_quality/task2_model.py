@@ -165,17 +165,39 @@ def validate_quality_scores(
     )
 
 
+# def assign_overall_grade(scores: QualityScores, is_rotten: bool = False) -> str:
+#     """Assign grade using strict thresholds: A>=85/90/80, C<65/70/60, else B. ROTTEN forces C."""
+#     if is_rotten:
+#         return "C"
+    
+#     if scores.colour < 65.0 or scores.size < 70.0 or scores.ripeness < 60.0:
+#         return "C"
+#     if scores.colour >= 75.0 and scores.size >= 80.0 and scores.ripeness >= 70.0:
+#         return "A"
+#     return "B"
+
+# Weighted average grading, allows a very bad score in one metric to be compensated by strong scores in others, which is more realistic for produce grading in practice.
 def assign_overall_grade(scores: QualityScores, is_rotten: bool = False) -> str:
-    """Assign grade using strict thresholds: A>=85/90/80, C<65/70/60, else B. ROTTEN forces C."""
+    """Assign grade using a weighted average for higher robustness."""
     if is_rotten:
+            return "C"
+    
+    c = float(scores.colour)
+    s = float(scores.size)
+    r = float(scores.ripeness)
+
+    # 1. Hard Floor: If any metric is truly terrible, it's a C
+    if c < 35.0 or s < 40.0 or r < 35.0:
         return "C"
     
-    if scores.colour < 65.0 or scores.size < 70.0 or scores.ripeness < 60.0:
-        return "C"
-    if scores.colour >= 75.0 and scores.size >= 80.0 and scores.ripeness >= 70.0:
+    # 2. Weighted Calculation
+    # Weights: Colour 40%, Size 30%, Ripeness 30%
+    weighted_score = (c * 0.40) + (s * 0.30) + (r * 0.30)
+    if weighted_score >= 68.0:
         return "A"
-    return "B"
-
+    if weighted_score >= 50.0:
+        return "B"
+    return "C"
 
 def update_inventory_and_discount(grade: str) -> Dict[str, object]:
     """Simulate inventory update and discount recommendation by grade."""
