@@ -1,0 +1,94 @@
+user_id,product_id,up_total_bought,up_last_order_num,product_name
+5,10,100,478,Fresh Whole Milk
+5,11,4,369,Farmhouse Cheddar Cheese
+5,18,84,480,Sourdough Loaf
+5,1,91,485,Organic Carrots
+5,8,6,385,Strawberries
+5,27,7,403,Apple Juice
+5,2,6,436,Organic Tomatoes
+5,7,95,484,Organic Free Range Eggs
+5,22,7,477,Conference Pears
+5,24,6,443,Strawberry Jam
+5,19,3,472,Walnut Bread
+5,25,4,226,Chutney Selection
+5,26,5,456,Local Honey
+5,29,4,322,Christmas Pudding
+5,16,5,482,Free Range Chicken
+5,6,7,441,Organic Courgettes
+5,20,6,361,Cinnamon Raisin Rolls
+5,17,2,397,Lamb Shoulder
+5,28,4,425,Farmhouse Cider
+5,14,6,309,Double Cream
+5,21,6,418,Fresh Apples
+5,23,7,433,Bramley Cooking Apples
+5,15,3,354,Goat's Cheese Log
+5,5,6,450,Organic Beetroot
+5,9,5,463,Purple Sprouting Broccoli
+7,5,4,41,Organic Beetroot
+7,3,3,27,Organic Potatoes
+7,7,3,32,Organic Free Range Eggs
+7,26,5,40,Local Honey
+6,24,3,17,Strawberry Jam
+5,4,2,448,Organic Lettuce
+6,20,2,8,Cinnamon Raisin Rolls
+8,11,5,48,Farmhouse Cheddar Cheese
+8,15,6,47,Goat's Cheese Log
+6,9,5,26,Purple Sprouting Broccoli
+8,6,4,38,Organic Courgettes
+6,8,4,42,Strawberries
+7,19,3,34,Walnut Bread
+8,26,2,33,Local Honey
+6,19,1,5,Walnut Bread
+8,12,4,46,Natural Yoghurt
+7,23,2,39,Bramley Cooking Apples
+7,27,1,10,Apple Juice
+8,24,1,7,Strawberry Jam
+6,27,3,40,Apple Juice
+7,2,2,15,Organic Tomatoes
+8,20,2,36,Cinnamon Raisin Rolls
+8,21,1,10,Fresh Apples
+5,3,1,285,Organic Potatoes
+7,17,4,42,Lamb Shoulder
+6,10,3,51,Fresh Whole Milk
+8,29,4,50,Christmas Pudding
+7,12,2,29,Natural Yoghurt
+8,7,1,13,Organic Free Range Eggs
+6,12,3,49,Natural Yoghurt
+7,14,2,45,Double Cream
+8,17,2,31,Lamb Shoulder
+6,2,1,14,Organic Tomatoes
+7,4,3,49,Organic Lettuce
+6,3,1,15,Organic Potatoes
+6,5,3,46,Organic Beetroot
+8,2,2,22,Organic Tomatoes
+7,29,2,48,Christmas Pudding
+5,12,2,344,Natural Yoghurt
+7,24,2,50,Strawberry Jam
+8,1,3,45,Organic Carrots
+6,18,2,22,Sourdough Loaf
+7,6,4,37,Organic Courgettes
+6,11,2,31,Farmhouse Cheddar Cheese
+6,7,3,39,Organic Free Range Eggs
+6,28,2,45,Farmhouse Cider
+8,23,1,18,Bramley Cooking Apples
+6,25,2,28,Chutney Selection
+6,16,1,29,Free Range Chicken
+6,13,1,30,Salted Butter
+7,18,1,28,Sourdough Loaf
+8,16,3,44,Free Range Chicken
+6,1,4,50,Organic Carrots
+8,4,2,37,Organic Lettuce
+8,9,1,26,Purple Sprouting Broccoli
+8,28,3,49,Farmhouse Cider
+6,29,2,35,Christmas Pudding
+7,28,2,33,Farmhouse Cider
+7,22,2,47,Conference Pears
+5,13,1,423,Salted Butter
+6,6,1,38,Organic Courgettes
+7,16,1,43,Free Range Chicken
+6,15,1,41,Goat's Cheese Log
+7,1,2,46,Organic Carrots
+8,5,2,43,Organic Beetroot
+8,19,1,42,Walnut Bread
+6,17,2,53,Lamb Shoulder
+6,14,1,52,Double Cream
