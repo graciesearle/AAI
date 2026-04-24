@@ -1,3 +1,4 @@
+import os
 import logging
 import pandas as pd
 import numpy as np
@@ -5,33 +6,22 @@ from mlxtend.frequent_patterns import fpgrowth, association_rules
 from mlxtend.preprocessing import TransactionEncoder
 
 logger = logging.getLogger(__name__)
-CSV_PATH = "task1/task1_recommendation/Groceries_dataset.csv"
+
+# Use absolute path relative to this file to avoid CWD issues
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "Groceries_dataset.csv")
+
 _rules_cache = None
 
 
 def _load_orders_from_db():
-    from orders.models import OrderItem
-
-    logger.info("Loading order history from database...")
-
-    rows = (
-        OrderItem.objects
-        .select_related("order")
-        .filter(order__status="DELIVERED")
-        .values("order__id", "order__created_at", "product_name")
-    )
-
-    if not rows.exists():
-        logger.warning("No delivered orders found in database.")
-        return pd.DataFrame(columns=["customer_id", "date", "item"])
-
-    df = pd.DataFrame(list(rows))
-    df.columns = ["customer_id", "date", "item"]
-    df["item"] = df["item"].str.strip().str.lower()
-    df["date"] = pd.to_datetime(df["date"], utc=True)
-
-    logger.info(f"Loaded {len(df)} order items from {df['customer_id'].nunique()} orders.")
-    return df
+    """
+    Placeholder for database loading. 
+    In a decoupled architecture, AAI should fetch this data via a DESD API 
+    endpoint or a shared export file rather than importing Django models directly.
+    """
+    logger.warning("Direct DB access from AAI is disabled. Falling back to CSV.")
+    return pd.DataFrame(columns=["customer_id", "date", "item"])
 
 
 def _load_orders_from_csv(csv_path=CSV_PATH):
@@ -126,7 +116,7 @@ def recommend(basket, top_n=5, use_db=True, csv_path=CSV_PATH):
                 if item not in basket_set:
                     recommendations.append({
                         "item": item,
-                        "because_you_bought": ", ".join(antecedents),
+                        "because_you_bought": list(antecedents),
                         "confidence": round(float(row["confidence"]), 3),
                         "lift": round(float(row["lift"]), 3),
                     })
