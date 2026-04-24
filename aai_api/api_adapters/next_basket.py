@@ -20,11 +20,12 @@ class NextBasketAdapterView(APIView):
         serializer = NextBasketRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        customer_id = serializer.validated_data['customer_id']
+        customer_id = serializer.validated_data.get('customer_id')
         top_n = serializer.validated_data.get('top_n', 5)
+        demo_mode = serializer.validated_data.get('demo_mode', False)
 
         try:
-            results = predict_next_basket(user_id=customer_id, top_n=top_n)
+            results = predict_next_basket(user_id=customer_id, top_n=top_n, demo_mode=demo_mode)
             
             if isinstance(results, dict) and "error" in results:
                 return Response({"detail": results["error"]}, status=status.HTTP_400_BAD_REQUEST)

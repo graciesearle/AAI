@@ -1,8 +1,9 @@
 from rest_framework import serializers
 
 class NextBasketRequestSerializer(serializers.Serializer):
-    customer_id = serializers.IntegerField(help_text="The ID of the customer to predict for")
+    customer_id = serializers.IntegerField(required=False, allow_null=True)
     top_n = serializers.IntegerField(default=5, required=False)
+    demo_mode = serializers.BooleanField(default=False, required=False)
 
 class NextBasketItemSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
