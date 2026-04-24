@@ -20,3 +20,5 @@ The system treats the case study as four connected capabilities:
 5. Task 4: Explainability outputs (XAI).
 
 `aai_api/` is the runtime entry point; it calls the task modules via adapters/services for use with DESD.
+
+The testing framework used is `pytest`, source code adheres to PEP8 and includes docstrings.

@@ -40,10 +40,11 @@ def _load_assets():
         if _scaler is None:
             _scaler = joblib.load(SCALER_PATH)
             
+        # Always reload Marketplace product names/stats to ensure we see fresh exports
         if os.path.exists(PROD_FEATURES_CSV):
             _prod_features = pd.read_csv(PROD_FEATURES_CSV)
             
-        if os.path.exists(RESEARCH_PROD_PKL):
+        if _research_prod_features is None and os.path.exists(RESEARCH_PROD_PKL):
             logger.info("Loading Research Product Features (Parity Mode)...")
             _research_prod_features = pd.read_pickle(RESEARCH_PROD_PKL)
         
@@ -144,17 +145,23 @@ def predict_next_basket(user_id=None, top_n=5, demo_mode=False):
     # --- 4. FORMAT OUTPUT ---
     recommendations = df.sort_values('score', ascending=False).head(top_n)
     
-    result = []
-    # Try to find a products.csv to get the real names (e.g. 'Banana')
-    prod_names = {}
-    name_file = os.path.join(INSTACART_DATA_DIR, 'products.csv')
-    if demo_mode and os.path.exists(name_file):
-        n_df = pd.read_csv(name_file)
-        prod_names = dict(zip(n_df['product_id'], n_df['product_name']))
+    # Build a lookup for product names based on current mode
+    name_lookup = {}
+    if demo_mode:
+        # For Demo Mode, try to get real Instacart names (Banana, etc.)
+        name_file = os.path.join(INSTACART_DATA_DIR, 'products.csv')
+        if os.path.exists(name_file):
+            n_df = pd.read_csv(name_file)
+            name_lookup = dict(zip(n_df['product_id'], n_df['product_name']))
+    else:
+        # For Production Mode, get names from the exported stats_df (Marketplace names)
+        if 'product_name' in stats_df.columns:
+            name_lookup = dict(zip(stats_df['product_id'], stats_df['product_name']))
 
+    result = []
     for _, row in recommendations.iterrows():
         p_id = int(row['product_id'])
-        display_name = prod_names.get(p_id, f"Product {p_id}")
+        display_name = name_lookup.get(p_id, f"Product {p_id}")
         
         result.append({
             "product_id": p_id,
