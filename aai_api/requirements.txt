@@ -19,6 +19,8 @@ scikit-learn
 joblib
 mlxtend
 
+pytest
+
 xgboost
 tensorflow
 pandas
