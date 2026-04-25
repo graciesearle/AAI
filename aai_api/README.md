@@ -1,9 +1,10 @@
-﻿# Advanced AI Repository
+# Advanced AI Repository
 
 - `GET /api/health/`
 - `POST /api/task1/recommend/`
 - `POST /api/task2/predict/`
-- `POST /api/task3/...` (lifecycle endpoints)
+- `GET/POST /api/task3/...` (Lifecycle management)
+- `GET/PATCH /api/task3/interactions/` (Interaction logging & Feedback)
 - `POST /api/task4/explain/`
 
 ## Local Development
@@ -168,8 +169,9 @@ docker compose --profile ai up -d --build
 ## Ownership Split (Recommended)
 
 - API + Integration Owner: `aai_api/`
-- Task 1 Owner: `task1/`
-- Task 2/3/4 Owner(s): `task2_3_4/`
+- Task 1 Logic Owner: `task1/`
+- Task 2 & 4 Logic Owner: `task2_3_4/`
+- Task 3 Implementation Owner: `aai_api/` (Service level)
 
 ## Notes
 

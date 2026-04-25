@@ -102,7 +102,7 @@ The script prints:
 If the checkpoint was written into `models/produce-quality/<version>/artifacts/model.pth`, activate directly:
 
 ```powershell
-python -c "import os,django; os.environ.setdefault('DJANGO_SETTINGS_MODULE','ai_service.settings'); django.setup(); from django.conf import settings; settings.ALLOWED_HOSTS.append('testserver'); from django.test import Client; c=Client(); v='1.0.1'; print(c.post('/api/task3/models/activate/', {'model_name':'produce-quality','model_version':v}).status_code)"
+python -c "import os,django; os.environ.setdefault('DJANGO_SETTINGS_MODULE','aai_api.ai_service.settings'); django.setup(); from django.conf import settings; settings.ALLOWED_HOSTS.append('testserver'); from django.test import Client; c=Client(); v='1.0.1'; print(c.post('/api/task3/models/activate/', {'model_name':'produce-quality','model_version':v}).status_code)"
 ```
 
 This works when a valid manifest and artifact exist for that version.
@@ -114,7 +114,7 @@ You can upload a checkpoint explicitly and then activate it.
 PowerShell example:
 
 ```powershell
-python -c "import os,django,uuid; os.environ.setdefault('DJANGO_SETTINGS_MODULE','ai_service.settings'); django.setup(); from django.conf import settings; settings.ALLOWED_HOSTS.append('testserver'); from django.test import Client; from django.core.files.uploadedfile import SimpleUploadedFile; c=Client(); v='qa-'+uuid.uuid4().hex[:8]; data=open('models/produce-quality/1.0.1/artifacts/model.pth','rb').read(); f=SimpleUploadedFile('model.pth', data, content_type='application/octet-stream'); up=c.post('/api/task3/models/upload/', {'model_name':'produce-quality','model_version':v,'framework':'pytorch','artifact':f}); print('upload', up.status_code); act=c.post('/api/task3/models/activate/', {'model_name':'produce-quality','model_version':v}); print('activate', act.status_code)"
+python -c "import os,django,uuid; os.environ.setdefault('DJANGO_SETTINGS_MODULE','aai_api.ai_service.settings'); django.setup(); from django.conf import settings; settings.ALLOWED_HOSTS.append('testserver'); from django.test import Client; from django.core.files.uploadedfile import SimpleUploadedFile; c=Client(); v='qa-'+uuid.uuid4().hex[:8]; data=open('models/produce-quality/1.0.1/artifacts/model.pth','rb').read(); f=SimpleUploadedFile('model.pth', data, content_type='application/octet-stream'); up=c.post('/api/task3/models/upload/', {'model_name':'produce-quality','model_version':v,'framework':'pytorch','artifact':f}); print('upload', up.status_code); act=c.post('/api/task3/models/activate/', {'model_name':'produce-quality','model_version':v}); print('activate', act.status_code)"
 ```
 
 ## Verify Inference Mode
@@ -127,5 +127,5 @@ After activation, verify Task 2 output note is model-backed:
 Quick check:
 
 ```powershell
-python -c "import os,django; os.environ.setdefault('DJANGO_SETTINGS_MODULE','ai_service.settings'); django.setup(); from django.conf import settings; settings.ALLOWED_HOSTS.append('testserver'); from django.test import Client; from io import BytesIO; from PIL import Image; from django.core.files.uploadedfile import SimpleUploadedFile; c=Client(); b=BytesIO(); Image.new('RGB',(32,32),(120,180,60)).save(b,format='PNG'); b.seek(0); f=SimpleUploadedFile('sample.png', b.read(), content_type='image/png'); r=c.post('/api/task2/predict/', {'producer_id':1,'image':f}); print('status', r.status_code); print('note', r.json().get('explanation_payload',{}).get('note'))"
+python -c "import os,django; os.environ.setdefault('DJANGO_SETTINGS_MODULE','aai_api.ai_service.settings'); django.setup(); from django.conf import settings; settings.ALLOWED_HOSTS.append('testserver'); from django.test import Client; from io import BytesIO; from PIL import Image; from django.core.files.uploadedfile import SimpleUploadedFile; c=Client(); b=BytesIO(); Image.new('RGB',(32,32),(120,180,60)).save(b,format='PNG'); b.seek(0); f=SimpleUploadedFile('sample.png', b.read(), content_type='image/png'); r=c.post('/api/task2/predict/', {'producer_id':1,'image':f}); print('status', r.status_code); print('note', r.json().get('explanation_payload',{}).get('note'))"
 ```
