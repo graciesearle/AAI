@@ -1,0 +1,30 @@
+product_id,prod_total_purchases,prod_reorder_rate,product_name
+10,103,0.9806,Fresh Whole Milk
+11,11,0.7273,Farmhouse Cheddar Cheese
+18,87,0.9655,Sourdough Loaf
+1,100,0.96,Organic Carrots
+8,10,0.8,Strawberries
+27,11,0.7273,Apple Juice
+2,11,0.6364,Organic Tomatoes
+7,102,0.9608,Organic Free Range Eggs
+22,9,0.7778,Conference Pears
+24,12,0.6667,Strawberry Jam
+19,8,0.5,Walnut Bread
+25,6,0.6667,Chutney Selection
+26,12,0.75,Local Honey
+29,12,0.6667,Christmas Pudding
+16,10,0.6,Free Range Chicken
+6,16,0.75,Organic Courgettes
+20,10,0.7,Cinnamon Raisin Rolls
+17,10,0.6,Lamb Shoulder
+28,11,0.6364,Farmhouse Cider
+14,9,0.6667,Double Cream
+21,7,0.7143,Fresh Apples
+23,10,0.7,Bramley Cooking Apples
+15,10,0.7,Goat's Cheese Log
+5,15,0.7333,Organic Beetroot
+9,11,0.7273,Purple Sprouting Broccoli
+3,5,0.4,Organic Potatoes
+4,7,0.5714,Organic Lettuce
+12,11,0.6364,Natural Yoghurt
+13,2,0.0,Salted Butter

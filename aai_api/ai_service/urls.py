@@ -1,6 +1,7 @@
 from django.urls import path
 
 from aai_api.api_adapters.task1 import RecommendationAdapterView
+from aai_api.api_adapters.next_basket import NextBasketAdapterView
 from aai_api.api_adapters.task2 import QualityPredictAdapterView
 from aai_api.api_adapters.task3 import (
     InteractionListAdapterView,
@@ -16,6 +17,7 @@ from aai_api.ai_core.views import HealthView
 urlpatterns = [
     path("api/health/", HealthView.as_view(), name="health"),
     path("api/task1/recommend/", RecommendationAdapterView.as_view(), name="task1-recommend"),
+    path("api/task1/next-basket/", NextBasketAdapterView.as_view(), name="task1-next-basket"),
     path("api/task2/predict/", QualityPredictAdapterView.as_view(), name="task2-predict"),
     path("api/task3/models/", LifecycleModelListAdapterView.as_view(), name="task3-model-list"),
     path("api/task3/models/upload/", LifecycleModelUploadAdapterView.as_view(), name="task3-model-upload"),
