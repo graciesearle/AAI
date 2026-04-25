@@ -1,12 +1,11 @@
-# AAI Task 2 - Deep Learning Produce Quality Pipeline
-
+# AAI REPO
 This repo is organised as one API service plus task modules for the case study.
 
 ## File Structure
 
-- `aai_api/`: runnable Django/DRF service (API adapters, core app logic, tests, Docker setup) - For DESD connection.
+- `aai_api/`: runnable Django/DRF service (API adapters, core app logic, tests, Docker setup) - Task 3 and For DESD connection.
 - `task1/`: Task 1-Next-Basket: Next-Basket Classification. Task1-Recommendation: Frequent Itemset Mining.
-- `task2_3_4/`: Task 2: Produce quality model, Task 3: Model lifecycle management (register/activate/sync), Task 4: Explainability outputs (XAI).
+- `task2_3_4/`: Task 2: Produce quality model, Task 3: Lives within each other task as `runtime.py` and serializers, Task 4: Explainability outputs (XAI).
 - `models/`: stored model artifacts and lifecycle registry data.
 
 ## How AAI Considers The Case Study
