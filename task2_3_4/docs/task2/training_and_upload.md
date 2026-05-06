@@ -97,6 +97,25 @@ The script prints:
 - Model output path
 - Plot output path
 
+## HITL Fine-Tuning (Override Exports)
+
+If you export HITL overrides from DESD (the retraining export ZIP contains
+`metadata.csv` and `images/`), you can fine-tune only the regression head
+using the human adjustments while keeping the classifier and backbone frozen.
+
+Example:
+
+```powershell
+python task2_quality/hitl_finetune.py --export-zip "path/to/retraining_export_YYYYMMDD_HHMMSS.zip" --base-model "models/produce-quality/1.0.0/artifacts/model.pth" --output-model "models/produce-quality/1.0.1/artifacts/model_hitl.pth" --epochs 8 --batch-size 16
+```
+
+Notes:
+
+- The script uses override scores when supplied, otherwise it uses accepted
+  scores from the export as targets.
+- Missing or incomplete override rows are skipped.
+- Use `--export-dir` if you already extracted the ZIP.
+
 ## Option A: Activate by Folder/Manifest Discovery (No Upload)
 
 If the checkpoint was written into `models/produce-quality/<version>/artifacts/model.pth`, activate directly:
