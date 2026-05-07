@@ -148,11 +148,29 @@ def predict_next_basket(user_id=None, top_n=5, demo_mode=False):
     # Build a lookup for product names based on current mode
     name_lookup = {}
     if demo_mode:
+        # Common Instacart IDs mapping for demo visual parity
+        demo_names = {
+            13176: "Bag of Organic Bananas",
+            24852: "Banana",
+            21137: "Organic Strawberries",
+            21903: "Organic Baby Spinach",
+            47209: "Organic Hass Avocado",
+            10258: "Pistachios",
+            12427: "Organic Fuji Apple",
+            196: "Soda",
+            4605: "Yellow Onions",
+            49683: "Cucumber Kirby",
+            28204: "Organic Fuji Apples",
+            40706: "Organic Grape Tomatoes",
+            47626: "Large Lemon"
+        }
+        name_lookup.update(demo_names)
+
         # For Demo Mode, try to get real Instacart names (Banana, etc.)
         name_file = os.path.join(INSTACART_DATA_DIR, 'products.csv')
         if os.path.exists(name_file):
             n_df = pd.read_csv(name_file)
-            name_lookup = dict(zip(n_df['product_id'], n_df['product_name']))
+            name_lookup.update(dict(zip(n_df['product_id'], n_df['product_name'])))
     else:
         # For Production Mode, get names from the exported stats_df (Marketplace names)
         if 'product_name' in stats_df.columns:

@@ -9,6 +9,7 @@ class RecommendationRequestSerializer(serializers.Serializer):
         allow_empty=True,
     )
     model_version = serializers.CharField(max_length=64, required=False, allow_blank=False)
+    top_n = serializers.IntegerField(required=False, default=4, min_value=1, max_value=20)
 
 
 class RecommendationResponseSerializer(serializers.Serializer):
