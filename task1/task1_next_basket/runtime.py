@@ -179,7 +179,7 @@ def predict_next_basket(user_id=None, top_n=5, demo_mode=False):
     result = []
     for _, row in recommendations.iterrows():
         p_id = int(row['product_id'])
-        display_name = name_lookup.get(p_id, f"Product {p_id}")
+        display_name = name_lookup.get(p_id) or name_lookup.get(str(p_id)) or f"Product {p_id}"
         
         result.append({
             "product_id": p_id,
