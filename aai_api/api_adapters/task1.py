@@ -31,6 +31,7 @@ class RecommendationAdapterView(APIView):
                 model_name=model_name,
                 model_version=model_version,
                 recent_items=serializer.validated_data.get("recent_items", []),
+                top_n=serializer.validated_data.get("top_n", 4),
                 manifest=manifest,
             )
         except ValueError as exc:
